@@ -169,8 +169,8 @@ def inject_styles() -> None:
         <style>
         .stApp {
           background:
-            radial-gradient(circle at top left, rgba(37, 99, 235, 0.35), transparent 30%),
-            radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.18), transparent 32%),
+            radial-gradient(circle at top left, rgba(30, 58, 138, 0.46), transparent 30%),
+            radial-gradient(circle at bottom right, rgba(29, 78, 216, 0.18), transparent 32%),
             linear-gradient(135deg, #020617, #07111f 46%, #0b1629);
           color: #e5f2ff;
         }
@@ -180,13 +180,11 @@ def inject_styles() -> None:
           max-width: 1280px;
         }
         .top-shell {
-          padding: 0.95rem 1.1rem;
-          border-radius: 22px;
-          border: 1px solid rgba(96, 165, 250, 0.28);
-          background: rgba(3, 8, 23, 0.78);
-          backdrop-filter: blur(14px);
-          box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34), 0 0 32px rgba(37, 99, 235, 0.12);
-          margin-bottom: 1rem;
+          padding: 0.25rem 0;
+          border: 0;
+          background: transparent;
+          box-shadow: none;
+          margin-bottom: 0.75rem;
         }
         .brand-title {
           font-size: 2rem;
@@ -198,22 +196,130 @@ def inject_styles() -> None:
           color: #a9bfdf;
           line-height: 1.6;
         }
-        .hero-card, .soft-card, .result-card {
-          border-radius: 24px;
-          border: 1px solid rgba(96, 165, 250, 0.2);
-          background: rgba(8, 15, 32, 0.82);
-          box-shadow: 0 16px 44px rgba(0, 0, 0, 0.3);
-          padding: 1.1rem;
+        .hero-card, .soft-card {
+          border: 0;
+          background: transparent;
+          box-shadow: none;
+          padding: 0;
+          margin: 0;
+        }
+        .result-card {
+          border-radius: 0;
+          border: 0;
+          border-bottom: 1px solid rgba(30, 64, 175, 0.28);
+          background: transparent;
+          box-shadow: none;
+          padding: 0.95rem 0;
         }
         .hero-card {
           min-height: 280px;
+        }
+        .landing-shell {
+          max-width: 980px;
+          margin: 0 auto;
+        }
+        .landing-hero {
+          text-align: center;
+          padding: 2.6rem 2rem;
+          border-radius: 32px;
+          border: 1px solid rgba(30, 64, 175, 0.4);
+          background:
+            radial-gradient(circle at top, rgba(30, 64, 175, 0.24), transparent 42%),
+            rgba(8, 15, 32, 0.84);
+          box-shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+        }
+        .landing-title {
+          font-size: clamp(2.5rem, 6vw, 5.4rem);
+          line-height: 0.95;
+          letter-spacing: -0.06em;
+          font-weight: 900;
+          color: #f8fbff;
+          margin: 0.9rem 0 1rem;
+        }
+        .landing-description {
+          max-width: 680px;
+          margin: 0 auto;
+          color: #b7c6dc;
+          font-size: 1.08rem;
+          line-height: 1.7;
+        }
+        .choice-card {
+          min-height: 150px;
+          border-radius: 24px;
+          border: 1px solid rgba(30, 64, 175, 0.34);
+          background: rgba(15, 23, 42, 0.82);
+          padding: 1.25rem;
+          margin-top: 1rem;
+        }
+        .choice-title {
+          font-size: 1.35rem;
+          font-weight: 800;
+          color: #f8fbff;
+          margin-bottom: 0.45rem;
+        }
+        .contact-bar {
+          margin-top: 1.8rem;
+          padding: 1.7rem 1.4rem;
+          border-radius: 26px;
+          border: 1px solid rgba(30, 64, 175, 0.38);
+          background: rgba(2, 6, 23, 0.72);
+          text-align: left;
+          color: #b7c6dc;
+          font-size: 1.02rem;
+        }
+        .contact-bar strong {
+          color: #f8fbff;
+        }
+        .contact-title {
+          display: block;
+          font-size: 1.25rem;
+          margin-bottom: 1rem;
+        }
+        .contact-detail {
+          line-height: 1.7;
+        }
+        .contact-detail span {
+          color: #8ea6c7;
+          font-size: 0.9rem;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+        .auth-action-bar {
+          max-width: 720px;
+          margin: 0.75rem auto 0;
+          padding: 0;
+          border: 0;
+          background: transparent;
+        }
+        .auth-panel {
+          max-width: 720px;
+          margin: 1rem auto 0;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          box-shadow: none;
+        }
+        .auth-state {
+          color: #b7c6dc;
+          line-height: 1.6;
+          margin-bottom: 0.75rem;
+        }
+        .st-key-landing_company_choice button {
+          background: linear-gradient(135deg, #1e3a8a, #1d4ed8) !important;
+          border: 1px solid rgba(59, 130, 246, 0.5) !important;
+          color: #f8fbff !important;
+          box-shadow: 0 12px 32px rgba(30, 64, 175, 0.28) !important;
+        }
+        .st-key-landing_company_choice button:hover {
+          background: linear-gradient(135deg, #1d4ed8, #2563eb) !important;
+          border-color: rgba(59, 130, 246, 0.72) !important;
         }
         .eyebrow {
           display: inline-block;
           padding: 0.4rem 0.75rem;
           border-radius: 999px;
-          background: rgba(37, 99, 235, 0.22);
-          color: #93c5fd;
+          background: rgba(30, 58, 138, 0.62);
+          color: #f8fbff;
           font-size: 0.8rem;
           font-weight: 700;
           letter-spacing: 0.04em;
@@ -226,11 +332,11 @@ def inject_styles() -> None:
           margin: 0.7rem 0 0.45rem;
         }
         .metric-card {
-          border-radius: 20px;
-          padding: 0.75rem 0.9rem;
-          background: rgba(15, 23, 42, 0.82);
-          border: 1px solid rgba(96, 165, 250, 0.16);
-          min-height: 86px;
+          border-radius: 0;
+          padding: 0.35rem 0;
+          background: transparent;
+          border: 0;
+          min-height: 58px;
         }
         .metric-label {
           color: #9db2d1;
@@ -239,40 +345,40 @@ def inject_styles() -> None:
         .metric-value {
           font-size: 1.55rem;
           font-weight: 800;
-          color: #38bdf8;
+          color: #3b82f6;
           margin-top: 0.25rem;
         }
         .map-selection-card {
           margin-top: 1rem;
-          border: 1px solid rgba(56, 189, 248, 0.28);
-          background: rgba(3, 12, 28, 0.9);
+          border: 0;
+          background: transparent;
         }
         .status-pill {
           display: inline-block;
           padding: 0.35rem 0.7rem;
           border-radius: 999px;
-          background: rgba(37, 99, 235, 0.22);
-          color: #bfdbfe;
+          background: rgba(30, 58, 138, 0.62);
+          color: #f8fbff;
           font-size: 0.82rem;
           font-weight: 700;
         }
         .status-pill.ai {
-          background: rgba(14, 165, 233, 0.18);
-          color: #7dd3fc;
+          background: rgba(29, 78, 216, 0.36);
+          color: #e5f2ff;
         }
         .notice {
           border-radius: 18px;
           padding: 0.95rem 1rem;
           margin-top: 0.75rem;
-          border: 1px solid rgba(96, 165, 250, 0.16);
+          border: 1px solid rgba(30, 64, 175, 0.34);
         }
         .notice strong {
           display: block;
           margin-bottom: 0.35rem;
         }
         .notice-info {
-          background: rgba(37, 99, 235, 0.16);
-          color: #bfdbfe;
+          background: rgba(30, 58, 138, 0.42);
+          color: #f8fbff;
         }
         .notice-success {
           background: rgba(34, 197, 94, 0.14);
@@ -291,7 +397,7 @@ def inject_styles() -> None:
           padding: 0.55rem 0.9rem;
           border-radius: 999px;
           background: rgba(2, 6, 23, 0.72);
-          border: 1px solid rgba(96, 165, 250, 0.18);
+          border: 1px solid rgba(30, 64, 175, 0.34);
           color: #dbeafe;
           font-weight: 700;
           margin: 0.45rem 0 0.8rem;
@@ -311,12 +417,12 @@ def inject_styles() -> None:
           margin-bottom: 0.35rem;
         }
         .score-local {
-          background: rgba(37, 99, 235, 0.22);
-          color: #bfdbfe;
+          background: rgba(30, 58, 138, 0.62);
+          color: #f8fbff;
         }
         .score-ai {
-          background: rgba(14, 165, 233, 0.18);
-          color: #7dd3fc;
+          background: rgba(29, 78, 216, 0.36);
+          color: #e5f2ff;
         }
         .helper-list {
           margin-top: 0.5rem;
@@ -332,7 +438,7 @@ def inject_styles() -> None:
         div[data-testid="stDateInput"] input {
           background-color: rgba(2, 6, 23, 0.86);
           color: #e5f2ff;
-          border: 1px solid rgba(96, 165, 250, 0.22);
+          border: 1px solid rgba(30, 64, 175, 0.42);
         }
         label, .stMarkdown, .stCaption, .stExpander {
           color: #e5f2ff;
@@ -362,6 +468,11 @@ def create_empty_draft() -> dict[str, Any]:
 def init_state() -> None:
     defaults = {
         "active_role": None,
+        "auth_view": "landing",
+        "pending_role": "",
+        "current_account": None,
+        "registered_accounts": [],
+        "auth_message": "",
         "company_profile": {
             "legalName": "",
             "businessNumber": "",
@@ -590,6 +701,75 @@ def get_delivery_date(announcement: dict[str, Any]) -> Any:
 
 def get_price_per_trip(announcement: dict[str, Any]) -> Any:
     return announcement.get("budget", 0)
+
+
+def get_role_label(role: str) -> str:
+    return "entreprise" if role == "company" else "transporteur"
+
+
+def normalize_email(value: Any) -> str:
+    return normalize_text(value).lower()
+
+
+def find_account_by_email(email: str) -> dict[str, Any] | None:
+    normalized_email = normalize_email(email)
+    return next(
+        (
+            account
+            for account in st.session_state.registered_accounts
+            if normalize_email(account["email"]) == normalized_email
+        ),
+        None,
+    )
+
+
+def apply_account_to_profile(account: dict[str, Any]) -> None:
+    if account["role"] == "company":
+        profile = st.session_state.company_profile
+        profile["legalName"] = profile["legalName"] or account["businessName"]
+        profile["contactName"] = profile["contactName"] or account["contactName"]
+        profile["email"] = profile["email"] or account["email"]
+        profile["phone"] = profile["phone"] or account["phone"]
+        st.session_state.company_legalName = profile["legalName"]
+        st.session_state.company_contactName = profile["contactName"]
+        st.session_state.company_email = profile["email"]
+        st.session_state.company_phone = profile["phone"]
+        return
+
+    profile = st.session_state.carrier_profile
+    profile["transportCompany"] = profile["transportCompany"] or account["businessName"]
+    profile["contactName"] = profile["contactName"] or account["contactName"]
+    profile["email"] = profile["email"] or account["email"]
+    profile["phone"] = profile["phone"] or account["phone"]
+    st.session_state.carrier_transportCompany = profile["transportCompany"]
+    st.session_state.carrier_contactName = profile["contactName"]
+    st.session_state.carrier_email = profile["email"]
+    st.session_state.carrier_phone = profile["phone"]
+
+
+def continue_as_role(role: str) -> None:
+    account = st.session_state.current_account
+    if account and account["role"] == role:
+        apply_account_to_profile(account)
+        st.session_state.active_role = role
+        st.session_state.auth_view = "landing"
+        st.session_state.auth_message = ""
+        st.rerun()
+
+    st.session_state.pending_role = role
+    st.session_state.auth_view = f"signup_{role}"
+    st.session_state.auth_message = (
+        f"Créez un compte {get_role_label(role)} pour continuer."
+    )
+    st.rerun()
+
+
+def sign_out() -> None:
+    st.session_state.current_account = None
+    st.session_state.active_role = None
+    st.session_state.auth_view = "landing"
+    st.session_state.pending_role = ""
+    st.session_state.auth_message = "Vous êtes déconnecté."
 
 
 def is_company_profile_complete() -> bool:
@@ -1707,6 +1887,17 @@ def render_carrier_requests_panel() -> None:
 
 
 def render_top_bar() -> None:
+    if st.session_state.active_role is None:
+        st.markdown(
+            f"""
+            <div class="top-shell" style="text-align:center;">
+              <div class="brand-title">{APP_NAME}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
     col1, col2 = st.columns([2.2, 1.2], vertical_alignment="center")
     with col1:
         st.markdown(
@@ -1725,72 +1916,275 @@ def render_top_bar() -> None:
             else ("Espace entreprise" if st.session_state.active_role == "company" else "Espace transporteur")
         )
         st.markdown(f"<div class='status-pill'>{current_space}</div>", unsafe_allow_html=True)
-        if st.button("Retour a l'accueil", use_container_width=True):
+        if st.button("Retour à l'accueil", use_container_width=True):
             st.session_state.active_role = None
             st.rerun()
-        if st.button("Reinitialiser la demo", use_container_width=True):
+        if st.button("Se déconnecter", use_container_width=True, key="topbar-signout"):
+            sign_out()
+            st.rerun()
+        if st.button("Réinitialiser la démo", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
 
 
-def render_landing() -> None:
-    col1, col2 = st.columns([1.2, 1], gap="large")
-    with col1:
-        st.markdown(
-            """
-            <div class="hero-card">
-              <span class="eyebrow">Place de marche logistique</span>
-              <div class="section-title">Relier les PME aux petits transporteurs.</div>
-              <p class="small-copy">
-                LoadSearch aide les entreprises a publier plusieurs voyages dans une seule annonce
-                et permet aux transporteurs de 1 a 4 camions de trouver des trajets adaptes a leur equipement.
-              </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        metrics = st.columns(3)
-        metric_values = [
-            ("Profils obligatoires", "100%"),
-            ("Annonces visibles", "Actives"),
-            ("Carte interactive", "Oui"),
-        ]
-        for column, (label, value) in zip(metrics, metric_values):
-            with column:
-                st.markdown(
-                    f"""
-                    <div class="metric-card">
-                      <div class="metric-label">{label}</div>
-                      <div class="metric-value">{value}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+def render_landing_contact() -> None:
+    st.markdown(
+        """
+        <div class="contact-bar">
+          <strong class="contact-title">Nous contacter</strong>
+          <div class="contact-detail">
+            <span>Courriel</span><br>
+            <strong>willgagne30@gmail.com</strong>
+          </div>
+          <br>
+          <div class="contact-detail">
+            <span>Téléphone</span><br>
+            <strong>418-222-8684</strong>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    with col2:
+
+def render_landing_auth_actions() -> None:
+    account = st.session_state.current_account
+    st.markdown("<div class='auth-action-bar'>", unsafe_allow_html=True)
+    if account:
         st.markdown(
-            """
-            <div class="soft-card">
-              <span class="eyebrow">Parcours</span>
-              <div class="section-title">Choisis ton interface</div>
-              <ul class="helper-list">
-                <li>Entreprise: creer des annonces, gerer plusieurs voyages et recevoir des propositions de transporteurs.</li>
-                <li>Transporteur: filtrer les annonces, voir la carte et proposer son service.</li>
-              </ul>
+            f"""
+            <div class="auth-state">
+              Connecté comme <strong>{account['businessName']}</strong>
+              ({get_role_label(account['role'])}).
             </div>
             """,
             unsafe_allow_html=True,
         )
-        button_cols = st.columns(2)
-        with button_cols[0]:
-            if st.button("Je suis une entreprise", type="primary", use_container_width=True):
-                st.session_state.active_role = "company"
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            if st.button("Continuer", type="primary", use_container_width=True):
+                continue_as_role(account["role"])
+        with action_cols[1]:
+            if st.button("Se déconnecter", use_container_width=True):
+                sign_out()
                 st.rerun()
-        with button_cols[1]:
-            if st.button("Je suis un transporteur", use_container_width=True):
-                st.session_state.active_role = "carrier"
+    else:
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            if st.button("Connexion", use_container_width=True):
+                st.session_state.auth_view = "login"
+                st.session_state.auth_message = ""
                 st.rerun()
+        with action_cols[1]:
+            if st.button("S'inscrire", use_container_width=True):
+                st.session_state.auth_view = "signup_choice"
+                st.session_state.auth_message = ""
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_signup_choice() -> None:
+    st.markdown("<div class='auth-panel'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Inscription</span>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Choisissez le type de compte</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<p class='small-copy'>Le type de compte détermine l'interface à laquelle vous aurez accès.</p>",
+        unsafe_allow_html=True,
+    )
+    choice_cols = st.columns(2)
+    with choice_cols[0]:
+        if st.button("Créer un compte entreprise", type="primary", use_container_width=True):
+            st.session_state.auth_view = "signup_company"
+            st.session_state.pending_role = "company"
+            st.rerun()
+    with choice_cols[1]:
+        if st.button("Créer un compte transporteur", use_container_width=True):
+            st.session_state.auth_view = "signup_carrier"
+            st.session_state.pending_role = "carrier"
+            st.rerun()
+    if st.button("Retour à l'accueil", use_container_width=True, key="signup-choice-back"):
+        st.session_state.auth_view = "landing"
+        st.session_state.auth_message = ""
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_login_panel() -> None:
+    st.markdown("<div class='auth-panel'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Connexion</span>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Connectez-vous pour continuer</div>", unsafe_allow_html=True)
+
+    with st.form("login_form"):
+        email = st.text_input("Courriel", key="login_email")
+        password = st.text_input("Mot de passe", type="password", key="login_password")
+        submit = st.form_submit_button("Se connecter", type="primary", use_container_width=True)
+
+    if submit:
+        account = find_account_by_email(email)
+        if not account or account["password"] != password:
+            show_notice("error", "Connexion impossible", "Le courriel ou le mot de passe est incorrect.")
+        else:
+            st.session_state.current_account = account
+            st.session_state.auth_view = "landing"
+            st.session_state.auth_message = ""
+            apply_account_to_profile(account)
+            st.session_state.active_role = account["role"]
+            st.rerun()
+
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        if st.button("Créer un compte", use_container_width=True, key="login-create-account"):
+            st.session_state.auth_view = "signup_choice"
+            st.rerun()
+    with action_cols[1]:
+        if st.button("Retour", use_container_width=True, key="login-back-home"):
+            st.session_state.auth_view = "landing"
+            st.session_state.auth_message = ""
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_signup_panel(role: str) -> None:
+    role_label = get_role_label(role)
+    business_label = "Nom de l'entreprise" if role == "company" else "Nom de la compagnie de transport"
+
+    st.markdown("<div class='auth-panel'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Inscription</span>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='section-title'>Créer un compte {role_label}</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p class='small-copy'>Après l'inscription, vous devrez compléter votre profil avant d'utiliser l'application.</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.form(f"signup_{role}_form"):
+        business_name = st.text_input(business_label, key=f"signup_{role}_business")
+        contact_name = st.text_input("Nom du responsable", key=f"signup_{role}_contact")
+        email = st.text_input("Courriel", key=f"signup_{role}_email")
+        phone = st.text_input("Téléphone", key=f"signup_{role}_phone")
+        password = st.text_input("Mot de passe", type="password", key=f"signup_{role}_password")
+        confirm_password = st.text_input(
+            "Confirmer le mot de passe",
+            type="password",
+            key=f"signup_{role}_confirm_password",
+        )
+        submit = st.form_submit_button("Créer mon compte", type="primary", use_container_width=True)
+
+    if submit:
+        required_values = [business_name, contact_name, email, phone, password, confirm_password]
+        if not all(normalize_text(value) for value in required_values):
+            show_notice("warning", "Champs manquants", "Veuillez remplir tous les champs pour créer le compte.")
+        elif password != confirm_password:
+            show_notice("error", "Mot de passe différent", "La confirmation ne correspond pas au mot de passe.")
+        elif find_account_by_email(email):
+            show_notice("warning", "Compte déjà existant", "Un compte existe déjà avec ce courriel. Utilisez la connexion.")
+        else:
+            account = {
+                "id": f"account-{datetime.now().timestamp()}",
+                "role": role,
+                "businessName": normalize_text(business_name),
+                "contactName": normalize_text(contact_name),
+                "email": normalize_email(email),
+                "phone": normalize_text(phone),
+                "password": password,
+                "createdAt": datetime.now().isoformat(timespec="seconds"),
+            }
+            st.session_state.registered_accounts.append(account)
+            st.session_state.current_account = account
+            st.session_state.auth_view = "landing"
+            st.session_state.auth_message = ""
+            apply_account_to_profile(account)
+            st.session_state.active_role = role
+            st.rerun()
+
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        if st.button("Déjà inscrit? Connexion", use_container_width=True, key=f"signup-login-{role}"):
+            st.session_state.auth_view = "login"
+            st.rerun()
+    with action_cols[1]:
+        if st.button("Retour", use_container_width=True, key=f"signup-back-{role}"):
+            st.session_state.auth_view = "landing"
+            st.session_state.auth_message = ""
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_landing() -> None:
+    st.markdown(
+        """
+        <div class="landing-shell">
+          <div class="landing-hero">
+            <span class="eyebrow">Transport local et régional</span>
+            <div class="landing-title">Trouver un voyage. Trouver un transporteur.</div>
+            <p class="landing-description">
+              LoadSearch met en relation les entreprises qui ont des produits à transporter
+              avec de petits transporteurs à la recherche de voyages adaptés à leur équipement.
+            </p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    render_landing_auth_actions()
+    if st.session_state.auth_message:
+        show_notice("info", "Accès", st.session_state.auth_message)
+
+    auth_view = st.session_state.auth_view
+    if auth_view == "login":
+        render_login_panel()
+        render_landing_contact()
+        return
+    if auth_view == "signup_choice":
+        render_signup_choice()
+        render_landing_contact()
+        return
+    if auth_view == "signup_company":
+        render_signup_panel("company")
+        render_landing_contact()
+        return
+    if auth_view == "signup_carrier":
+        render_signup_panel("carrier")
+        render_landing_contact()
+        return
+
+    choice_cols = st.columns(2, gap="large")
+    with choice_cols[0]:
+        st.markdown(
+            """
+            <div class="choice-card">
+              <div class="choice-title">Entreprise</div>
+              <div class="small-copy">Publiez vos voyages disponibles et recevez des propositions de transporteurs qualifiés.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Je suis une entreprise",
+            type="primary",
+            use_container_width=True,
+            key="landing_company_choice",
+        ):
+            continue_as_role("company")
+
+    with choice_cols[1]:
+        st.markdown(
+            """
+            <div class="choice-card">
+              <div class="choice-title">Transporteur</div>
+              <div class="small-copy">Repérez les trajets disponibles sur la carte et proposez votre service aux entreprises.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Je suis un transporteur", use_container_width=True, key="landing_carrier_choice"):
+            continue_as_role("carrier")
+
+    render_landing_contact()
 
 
 def render_company_profile() -> None:
