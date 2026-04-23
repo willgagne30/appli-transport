@@ -20,7 +20,6 @@ MAP_BASE_STYLE = pdk.map_styles.CARTO_ROAD
 EQUIPMENT_OPTIONS = [
     "Flatbed",
     "Drybox",
-    "Dribox",
     "Fardier",
     "Benne",
     "Porte-autos",
@@ -62,54 +61,6 @@ CARRIER_EXAMPLE_PROMPT = (
     "cherche surtout des voyages autour de Montreal, Laval, Trois-Rivieres, "
     "Quebec ou Ottawa."
 )
-
-DEMO_ANNOUNCEMENTS = [
-    {
-        "id": "demo-1",
-        "title": "Bois d'oeuvre vers Laval",
-        "pickupCity": "Trois-Rivieres",
-        "deliveryCity": "Laval",
-        "cargoType": "Bois",
-        "equipment": "Flatbed",
-        "loadingDate": "2026-04-24",
-        "deliveryDate": "2026-04-25",
-        "tripsTotal": 4,
-        "remainingTrips": 3,
-        "budget": 1650,
-        "notes": "Chargement matinal, arrimage obligatoire.",
-        "companyName": "Bois Martin Inc.",
-    },
-    {
-        "id": "demo-2",
-        "title": "Transport de tuyaux industriels",
-        "pickupCity": "Drummondville",
-        "deliveryCity": "Sherbrooke",
-        "cargoType": "Tuyaux",
-        "equipment": "Plateforme",
-        "loadingDate": "2026-04-26",
-        "deliveryDate": "2026-04-27",
-        "tripsTotal": 2,
-        "remainingTrips": 2,
-        "budget": 1280,
-        "notes": "Dechargement sur rendez-vous seulement.",
-        "companyName": "Ateliers Nordex",
-    },
-    {
-        "id": "demo-3",
-        "title": "Livraison d'autos neuves",
-        "pickupCity": "Brossard",
-        "deliveryCity": "Ottawa",
-        "cargoType": "Autos",
-        "equipment": "Porte-autos",
-        "loadingDate": "2026-04-28",
-        "deliveryDate": "2026-04-29",
-        "tripsTotal": 3,
-        "remainingTrips": 1,
-        "budget": 2450,
-        "notes": "Inspection photo avant depart demandee.",
-        "companyName": "AutoNova Distribution",
-    },
-]
 
 CITY_COORDINATES = {
     "montreal": (45.5017, -73.5673),
@@ -452,8 +403,12 @@ def inject_styles() -> None:
 def create_empty_draft() -> dict[str, Any]:
     return {
         "title": "",
+        "pickupAddress": "",
         "pickupCity": "",
+        "pickupPostalCode": "",
+        "deliveryAddress": "",
         "deliveryCity": "",
+        "deliveryPostalCode": "",
         "cargoType": "",
         "cargoTypeOther": "",
         "equipment": "",
@@ -486,6 +441,7 @@ def init_state() -> None:
         "carrier_profile": {
             "transportCompany": "",
             "businessNumber": "",
+            "insuranceNumber": "",
             "contactName": "",
             "email": "",
             "phone": "",
@@ -493,7 +449,7 @@ def init_state() -> None:
             "regions": "",
             "equipmentTypes": [],
         },
-        "announcements": copy.deepcopy(DEMO_ANNOUNCEMENTS),
+        "announcements": [],
         "filters": {
             "pickupCity": "",
             "deliveryCity": "",
@@ -539,13 +495,39 @@ def init_state() -> None:
 
 
 def ensure_state_shape() -> None:
+    carrier_profile = st.session_state.carrier_profile
+    if "insuranceNumber" not in carrier_profile:
+        carrier_profile["insuranceNumber"] = ""
+
+    for account in st.session_state.registered_accounts:
+        if account.get("role") == "carrier" and "insuranceNumber" not in account:
+            account["insuranceNumber"] = ""
+
     for announcement in st.session_state.announcements:
+        if "pickupAddress" not in announcement:
+            announcement["pickupAddress"] = ""
+        if "pickupPostalCode" not in announcement:
+            announcement["pickupPostalCode"] = ""
+        if "deliveryAddress" not in announcement:
+            announcement["deliveryAddress"] = ""
+        if "deliveryPostalCode" not in announcement:
+            announcement["deliveryPostalCode"] = ""
         if "deliveryDate" not in announcement:
             announcement["deliveryDate"] = announcement.get("loadingDate", "")
         if "budget" not in announcement:
             announcement["budget"] = 0
+        if "expiredAt" not in announcement:
+            announcement["expiredAt"] = ""
 
     draft = st.session_state.draft_announcement
+    if "pickupAddress" not in draft:
+        draft["pickupAddress"] = ""
+    if "pickupPostalCode" not in draft:
+        draft["pickupPostalCode"] = ""
+    if "deliveryAddress" not in draft:
+        draft["deliveryAddress"] = ""
+    if "deliveryPostalCode" not in draft:
+        draft["deliveryPostalCode"] = ""
     if "deliveryDate" not in draft:
         draft["deliveryDate"] = draft.get("loadingDate")
     if "budget" not in draft:
@@ -569,6 +551,7 @@ def sync_widget_keys_from_state() -> None:
         "company_industry": company["industry"],
         "carrier_transportCompany": carrier["transportCompany"],
         "carrier_businessNumber": carrier["businessNumber"],
+        "carrier_insuranceNumber": carrier["insuranceNumber"],
         "carrier_contactName": carrier["contactName"],
         "carrier_email": carrier["email"],
         "carrier_phone": carrier["phone"],
@@ -578,8 +561,12 @@ def sync_widget_keys_from_state() -> None:
         "company_ai_prompt": st.session_state.company_ai["requestText"],
         "carrier_ai_prompt": st.session_state.carrier_ai["requestText"],
         "announcement_title": draft["title"],
+        "announcement_pickupAddress": draft["pickupAddress"],
         "announcement_pickupCity": draft["pickupCity"],
+        "announcement_pickupPostalCode": draft["pickupPostalCode"],
+        "announcement_deliveryAddress": draft["deliveryAddress"],
         "announcement_deliveryCity": draft["deliveryCity"],
+        "announcement_deliveryPostalCode": draft["deliveryPostalCode"],
         "announcement_equipment": draft["equipment"],
         "announcement_loadingDate": draft["loadingDate"],
         "announcement_deliveryDate": draft.get("deliveryDate"),
@@ -695,12 +682,44 @@ def format_currency(value: Any) -> str:
     return f"{number:,.0f} $ CAD".replace(",", " ")
 
 
+def combine_location_parts(*parts: Any) -> str:
+    clean_parts = [normalize_text(part) for part in parts if normalize_text(part)]
+    return ", ".join(clean_parts)
+
+
+def format_exact_location(address: Any, city: Any, postal_code: Any) -> str:
+    return combine_location_parts(address, city, postal_code) or "Non precise"
+
+
+def geocode_stop(address: Any, city: Any, postal_code: Any) -> tuple[float, float] | None:
+    exact_query = combine_location_parts(address, city, postal_code)
+    if exact_query:
+        exact_coords = geocode_location(exact_query)
+        if exact_coords:
+            return exact_coords
+
+    fallback_query = combine_location_parts(city, postal_code) or normalize_text(city)
+    if fallback_query:
+        return geocode_location(fallback_query)
+    return None
+
+
 def get_delivery_date(announcement: dict[str, Any]) -> Any:
     return announcement.get("deliveryDate") or announcement.get("loadingDate")
 
 
 def get_price_per_trip(announcement: dict[str, Any]) -> Any:
     return announcement.get("budget", 0)
+
+
+def is_announcement_expired(announcement: dict[str, Any]) -> bool:
+    return bool(normalize_text(announcement.get("expiredAt")))
+
+
+def is_announcement_active(announcement: dict[str, Any]) -> bool:
+    return int(announcement.get("remainingTrips", 0)) > 0 and not is_announcement_expired(
+        announcement
+    )
 
 
 def get_role_label(role: str) -> str:
@@ -738,10 +757,14 @@ def apply_account_to_profile(account: dict[str, Any]) -> None:
 
     profile = st.session_state.carrier_profile
     profile["transportCompany"] = profile["transportCompany"] or account["businessName"]
+    profile["businessNumber"] = profile["businessNumber"] or account.get("businessNumber", "")
+    profile["insuranceNumber"] = profile["insuranceNumber"] or account.get("insuranceNumber", "")
     profile["contactName"] = profile["contactName"] or account["contactName"]
     profile["email"] = profile["email"] or account["email"]
     profile["phone"] = profile["phone"] or account["phone"]
     st.session_state.carrier_transportCompany = profile["transportCompany"]
+    st.session_state.carrier_businessNumber = profile["businessNumber"]
+    st.session_state.carrier_insuranceNumber = profile["insuranceNumber"]
     st.session_state.carrier_contactName = profile["contactName"]
     st.session_state.carrier_email = profile["email"]
     st.session_state.carrier_phone = profile["phone"]
@@ -792,6 +815,7 @@ def is_carrier_profile_complete() -> bool:
     required = [
         "transportCompany",
         "businessNumber",
+        "insuranceNumber",
         "contactName",
         "email",
         "phone",
@@ -804,7 +828,7 @@ def get_active_announcements() -> list[dict[str, Any]]:
     return [
         announcement
         for announcement in st.session_state.announcements
-        if int(announcement["remainingTrips"]) > 0
+        if is_announcement_active(announcement)
     ]
 
 
@@ -821,7 +845,7 @@ def get_company_active_announcements() -> list[dict[str, Any]]:
     return [
         announcement
         for announcement in get_company_announcements()
-        if int(announcement["remainingTrips"]) > 0
+        if is_announcement_active(announcement)
     ]
 
 
@@ -885,6 +909,32 @@ def add_notification(
     )
 
 
+def expire_outdated_announcements() -> None:
+    today = datetime.now().date()
+
+    for announcement in st.session_state.announcements:
+        if is_announcement_expired(announcement):
+            continue
+        if int(announcement.get("remainingTrips", 0)) <= 0:
+            continue
+
+        delivery_date = normalize_date_value(get_delivery_date(announcement))
+        if not delivery_date or delivery_date >= today:
+            continue
+
+        announcement["expiredAt"] = datetime.now().isoformat(timespec="seconds")
+        add_notification(
+            recipient_role="company",
+            recipient_name=announcement["companyName"],
+            title="Annonce retirée automatiquement",
+            message=(
+                f"L'annonce \"{announcement['title']}\" a été retirée automatiquement "
+                f"car sa date de livraison du {format_date(delivery_date)} est dépassée."
+            ),
+            related_announcement_id=announcement["id"],
+        )
+
+
 def create_service_request(
     announcement_id: str, requested_trips: int, message: str
 ) -> tuple[bool, str]:
@@ -894,9 +944,11 @@ def create_service_request(
     )
     if not announcement:
         return False, "Annonce introuvable."
+    if not is_announcement_active(announcement):
+        return False, "Cette annonce n'est plus active."
 
     carrier = st.session_state.carrier_profile
-    if not carrier["transportCompany"]:
+    if not is_carrier_profile_complete():
         return False, "Le profil transporteur doit etre complet."
 
     for request in st.session_state.service_requests:
@@ -914,9 +966,13 @@ def create_service_request(
         "announcementTitle": announcement["title"],
         "companyName": announcement["companyName"],
         "carrierName": carrier["transportCompany"],
+        "carrierBusinessNumber": carrier["businessNumber"],
+        "carrierInsuranceNumber": carrier["insuranceNumber"],
         "carrierContactName": carrier["contactName"],
         "carrierPhone": carrier["phone"],
         "carrierEmail": carrier["email"],
+        "carrierFleetSize": int(carrier["fleetSize"]),
+        "carrierEquipmentTypes": list(carrier["equipmentTypes"]),
         "requestedTrips": max(1, int(requested_trips)),
         "message": normalize_text(message),
         "status": "pending",
@@ -962,6 +1018,8 @@ def process_service_request_decision(
     announcement = find_announcement(service_request["announcementId"])
     if not announcement:
         return False, "L'annonce liee est introuvable."
+    if is_announcement_expired(announcement):
+        return False, "Cette annonce a expiré et a été retirée automatiquement."
 
     if decision == "accepted":
         requested_trips = int(service_request["requestedTrips"])
@@ -1055,8 +1113,26 @@ def build_map_rows(announcements: list[dict[str, Any]]) -> tuple[list[dict[str, 
     arcs: list[dict[str, Any]] = []
 
     for announcement in announcements:
-        pickup_coords = geocode_location(announcement["pickupCity"])
-        delivery_coords = geocode_location(announcement["deliveryCity"])
+        pickup_coords = geocode_stop(
+            announcement.get("pickupAddress"),
+            announcement.get("pickupCity"),
+            announcement.get("pickupPostalCode"),
+        )
+        delivery_coords = geocode_stop(
+            announcement.get("deliveryAddress"),
+            announcement.get("deliveryCity"),
+            announcement.get("deliveryPostalCode"),
+        )
+        pickup_label = normalize_text(announcement.get("pickupCity")) or format_exact_location(
+            announcement.get("pickupAddress"),
+            announcement.get("pickupCity"),
+            announcement.get("pickupPostalCode"),
+        )
+        delivery_label = normalize_text(announcement.get("deliveryCity")) or format_exact_location(
+            announcement.get("deliveryAddress"),
+            announcement.get("deliveryCity"),
+            announcement.get("deliveryPostalCode"),
+        )
         map_details = {
             "pricePerTrip": format_currency(get_price_per_trip(announcement)),
             "deliveryDate": format_date(get_delivery_date(announcement)),
@@ -1069,7 +1145,7 @@ def build_map_rows(announcements: list[dict[str, Any]]) -> tuple[list[dict[str, 
                 {
                     "announcementId": announcement["id"],
                     "announcementTitle": announcement["title"],
-                    "city": announcement["pickupCity"],
+                    "city": pickup_label,
                     "kind": "Chargement",
                     "lat": pickup_coords[0],
                     "lon": pickup_coords[1],
@@ -1084,7 +1160,7 @@ def build_map_rows(announcements: list[dict[str, Any]]) -> tuple[list[dict[str, 
                 {
                     "announcementId": announcement["id"],
                     "announcementTitle": announcement["title"],
-                    "city": announcement["deliveryCity"],
+                    "city": delivery_label,
                     "kind": "Livraison",
                     "lat": delivery_coords[0],
                     "lon": delivery_coords[1],
@@ -1100,7 +1176,7 @@ def build_map_rows(announcements: list[dict[str, Any]]) -> tuple[list[dict[str, 
                     "announcementId": announcement["id"],
                     "announcementTitle": announcement["title"],
                     "companyName": announcement["companyName"],
-                    "city": f"{announcement['pickupCity']} -> {announcement['deliveryCity']}",
+                    "city": f"{pickup_label} -> {delivery_label}",
                     "kind": "Trajet",
                     "source_lat": pickup_coords[0],
                     "source_lon": pickup_coords[1],
@@ -1139,12 +1215,35 @@ def render_market_map(
     st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
     st.markdown(f"<p class='small-copy'>{subtitle}</p>", unsafe_allow_html=True)
 
+    if not announcements:
+        empty_deck = pdk.Deck(
+            map_style=MAP_BASE_STYLE,
+            initial_view_state=pdk.ViewState(
+                latitude=45.5,
+                longitude=-73.8,
+                zoom=3.4,
+                pitch=12,
+            ),
+            layers=[],
+        )
+        st.pydeck_chart(
+            empty_deck,
+            width="stretch",
+            height=520,
+            selection_mode="single-object",
+            on_select="ignore",
+            key=f"{key}-empty",
+        )
+        st.caption("Aucune annonce active pour le moment.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return ""
+
     points, arcs = build_map_rows(announcements)
     if not points:
         show_notice(
             "info",
             "Carte indisponible pour certains lieux",
-            "Entre un lieu complet comme 'Saint-Aurelie, QC' ou 'Boston, MA' pour maximiser les chances de geocodage.",
+            "Entre une adresse complete avec ville et code postal pour maximiser la precision des points sur la carte.",
         )
         st.markdown("</div>", unsafe_allow_html=True)
         return ""
@@ -1194,7 +1293,8 @@ def render_market_map(
         layers=layers,
         tooltip={
             "html": (
-                "<b>{city}</b><br/>"
+                "<b>{companyName}</b><br/>"
+                "{city}<br/>"
                 "Prix/voyage: {pricePerTrip}<br/>"
                 "Date de livraison: {deliveryDate}<br/>"
                 "Equipement requis: {equipment}<br/>"
@@ -1476,8 +1576,12 @@ def build_company_prompt(request_text: str) -> str:
     template = {
         "announcement": {
             "title": "",
+            "pickupAddress": "",
             "pickupCity": "",
+            "pickupPostalCode": "",
+            "deliveryAddress": "",
             "deliveryCity": "",
+            "deliveryPostalCode": "",
             "cargoType": "",
             "equipment": "",
             "loadingDate": "",
@@ -1495,6 +1599,8 @@ def build_company_prompt(request_text: str) -> str:
         + "\n\nRetourne exactement cet objet JSON:\n"
         + json.dumps(template, ensure_ascii=True, indent=2)
         + "\n\nRegles:\n"
+        + "- pickupAddress et deliveryAddress doivent contenir l'adresse exacte si elle est connue.\n"
+        + "- pickupPostalCode et deliveryPostalCode doivent contenir le code postal si possible.\n"
         + "- loadingDate doit etre YYYY-MM-DD si possible.\n"
         + "- deliveryDate doit etre YYYY-MM-DD si possible et represente la date de livraison.\n"
         + "- tripsTotal et budget doivent etre des nombres; budget represente le prix par voyage.\n"
@@ -1506,10 +1612,19 @@ def build_company_prompt(request_text: str) -> str:
 def apply_company_ai_response(payload: dict[str, Any]) -> None:
     announcement = payload.get("announcement", {})
     cargo_type, cargo_other = normalize_cargo_option(announcement.get("cargoType"))
+    current_draft = st.session_state.draft_announcement
     draft = {
         "title": normalize_text(announcement.get("title")),
+        "pickupAddress": normalize_text(announcement.get("pickupAddress"))
+        or current_draft.get("pickupAddress", ""),
         "pickupCity": normalize_text(announcement.get("pickupCity")),
+        "pickupPostalCode": normalize_text(announcement.get("pickupPostalCode"))
+        or current_draft.get("pickupPostalCode", ""),
+        "deliveryAddress": normalize_text(announcement.get("deliveryAddress"))
+        or current_draft.get("deliveryAddress", ""),
         "deliveryCity": normalize_text(announcement.get("deliveryCity")),
+        "deliveryPostalCode": normalize_text(announcement.get("deliveryPostalCode"))
+        or current_draft.get("deliveryPostalCode", ""),
         "cargoType": cargo_type,
         "cargoTypeOther": cargo_other,
         "equipment": normalize_equipment_option(announcement.get("equipment")),
@@ -1690,8 +1805,12 @@ def render_suggested_filters() -> dict[str, str]:
 def export_current_draft() -> dict[str, Any]:
     return {
         "title": st.session_state.announcement_title,
+        "pickupAddress": st.session_state.announcement_pickupAddress,
         "pickupCity": st.session_state.announcement_pickupCity,
+        "pickupPostalCode": st.session_state.announcement_pickupPostalCode,
+        "deliveryAddress": st.session_state.announcement_deliveryAddress,
         "deliveryCity": st.session_state.announcement_deliveryCity,
+        "deliveryPostalCode": st.session_state.announcement_deliveryPostalCode,
         "cargoType": (
             st.session_state.announcement_cargoTypeOther
             if st.session_state.announcement_cargoType == OTHER_CARGO_VALUE
@@ -1713,8 +1832,12 @@ def export_current_draft() -> dict[str, Any]:
 def apply_draft_to_widgets() -> None:
     draft = st.session_state.draft_announcement
     st.session_state.announcement_title = draft["title"]
+    st.session_state.announcement_pickupAddress = draft["pickupAddress"]
     st.session_state.announcement_pickupCity = draft["pickupCity"]
+    st.session_state.announcement_pickupPostalCode = draft["pickupPostalCode"]
+    st.session_state.announcement_deliveryAddress = draft["deliveryAddress"]
     st.session_state.announcement_deliveryCity = draft["deliveryCity"]
+    st.session_state.announcement_deliveryPostalCode = draft["deliveryPostalCode"]
     st.session_state.announcement_equipment = draft["equipment"]
     st.session_state.announcement_loadingDate = draft["loadingDate"]
     st.session_state.announcement_deliveryDate = draft.get("deliveryDate")
@@ -1803,6 +1926,33 @@ def render_company_requests_panel() -> None:
             """,
             unsafe_allow_html=True,
         )
+
+        equipment_types = service_request.get("carrierEquipmentTypes") or []
+        equipment_html = " ".join(
+            f"<span class='status-pill'>{item}</span>" for item in equipment_types
+        )
+        with st.expander(f"Voir le profil du transporteur - {service_request['carrierName']}"):
+            profile_cols = st.columns(2)
+            with profile_cols[0]:
+                st.caption("Numero d'entreprise")
+                st.write(service_request.get("carrierBusinessNumber") or "Non renseigne")
+                st.caption("Preuve d'assurance")
+                st.write(service_request.get("carrierInsuranceNumber") or "Non renseigne")
+                st.caption("Nombre de camions")
+                st.write(service_request.get("carrierFleetSize") or "Non renseigne")
+            with profile_cols[1]:
+                st.caption("Nom du responsable")
+                st.write(service_request.get("carrierContactName") or "Non renseigne")
+                st.caption("Telephone")
+                st.write(service_request.get("carrierPhone") or "Non renseigne")
+                st.caption("Courriel")
+                st.write(service_request.get("carrierEmail") or "Non renseigne")
+
+            st.caption("Equipements")
+            st.markdown(
+                equipment_html or "<div class='small-copy'>Non renseigne</div>",
+                unsafe_allow_html=True,
+            )
 
         if service_request["status"] == "pending":
             with st.form(f"decision-form-{service_request['id']}"):
@@ -2065,6 +2215,12 @@ def render_signup_panel(role: str) -> None:
         contact_name = st.text_input("Nom du responsable", key=f"signup_{role}_contact")
         email = st.text_input("Courriel", key=f"signup_{role}_email")
         phone = st.text_input("Téléphone", key=f"signup_{role}_phone")
+        insurance_number = ""
+        if role == "carrier":
+            insurance_number = st.text_input(
+                "Numero du certificat ou contrat d'assurance",
+                key=f"signup_{role}_insuranceNumber",
+            )
         password = st.text_input("Mot de passe", type="password", key=f"signup_{role}_password")
         confirm_password = st.text_input(
             "Confirmer le mot de passe",
@@ -2075,6 +2231,8 @@ def render_signup_panel(role: str) -> None:
 
     if submit:
         required_values = [business_name, contact_name, email, phone, password, confirm_password]
+        if role == "carrier":
+            required_values.append(insurance_number)
         if not all(normalize_text(value) for value in required_values):
             show_notice("warning", "Champs manquants", "Veuillez remplir tous les champs pour créer le compte.")
         elif password != confirm_password:
@@ -2089,6 +2247,7 @@ def render_signup_panel(role: str) -> None:
                 "contactName": normalize_text(contact_name),
                 "email": normalize_email(email),
                 "phone": normalize_text(phone),
+                "insuranceNumber": normalize_text(insurance_number) if role == "carrier" else "",
                 "password": password,
                 "createdAt": datetime.now().isoformat(timespec="seconds"),
             }
@@ -2248,6 +2407,10 @@ def render_carrier_profile() -> None:
             st.number_input("Nombre de camions", min_value=1, max_value=4, step=1, key="carrier_fleetSize")
         with col2:
             st.text_input("Numero d'entreprise", key="carrier_businessNumber")
+            st.text_input(
+                "Numero du certificat ou contrat d'assurance",
+                key="carrier_insuranceNumber",
+            )
             st.text_input("Courriel", key="carrier_email")
             st.text_input("Regions desservies", key="carrier_regions")
             st.multiselect("Equipements disponibles", EQUIPMENT_OPTIONS, key="carrier_equipmentTypes")
@@ -2257,6 +2420,7 @@ def render_carrier_profile() -> None:
         st.session_state.carrier_profile = {
             "transportCompany": st.session_state.carrier_transportCompany,
             "businessNumber": st.session_state.carrier_businessNumber,
+            "insuranceNumber": st.session_state.carrier_insuranceNumber,
             "contactName": st.session_state.carrier_contactName,
             "email": st.session_state.carrier_email,
             "phone": st.session_state.carrier_phone,
@@ -2271,9 +2435,15 @@ def render_carrier_profile() -> None:
 
 def render_company_dashboard() -> None:
     company_announcements = get_company_announcements()
-    active_count = sum(1 for item in company_announcements if int(item["remainingTrips"]) > 0)
-    complete_count = sum(1 for item in company_announcements if int(item["remainingTrips"]) == 0)
-    remaining_total = sum(int(item["remainingTrips"]) for item in company_announcements)
+    active_count = sum(1 for item in company_announcements if is_announcement_active(item))
+    complete_count = sum(
+        1
+        for item in company_announcements
+        if is_announcement_expired(item) or int(item["remainingTrips"]) == 0
+    )
+    remaining_total = sum(
+        int(item["remainingTrips"]) for item in company_announcements if is_announcement_active(item)
+    )
 
     metrics = st.columns(3)
     for column, label, value in [
@@ -2338,14 +2508,52 @@ def render_announcement_form() -> None:
     }
 
     with st.form("announcement_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.text_input("Titre de l'annonce", key="announcement_title")
+        st.text_input("Titre de l'annonce", key="announcement_title")
+
+        st.caption("Chargement")
+        pickup_cols = st.columns([1.7, 1.1, 0.9])
+        with pickup_cols[0]:
             st.text_input(
-                "Lieu de chargement",
-                key="announcement_pickupCity",
-                help="Exemple: Saint-Aurelie, QC",
+                "Adresse de chargement",
+                key="announcement_pickupAddress",
+                help="Exemple: 1250 rang Saint-Joseph",
             )
+        with pickup_cols[1]:
+            st.text_input(
+                "Ville de chargement",
+                key="announcement_pickupCity",
+                help="Exemple: Saint-Aurelie",
+            )
+        with pickup_cols[2]:
+            st.text_input(
+                "Code postal de chargement",
+                key="announcement_pickupPostalCode",
+                help="Exemple: G0M 1R0",
+            )
+
+        st.caption("Livraison")
+        delivery_cols = st.columns([1.7, 1.1, 0.9])
+        with delivery_cols[0]:
+            st.text_input(
+                "Adresse de livraison",
+                key="announcement_deliveryAddress",
+                help="Exemple: 12 Industrial Park Road",
+            )
+        with delivery_cols[1]:
+            st.text_input(
+                "Ville de livraison",
+                key="announcement_deliveryCity",
+                help="Exemple: Boston",
+            )
+        with delivery_cols[2]:
+            st.text_input(
+                "Code postal de livraison",
+                key="announcement_deliveryPostalCode",
+                help="Exemple: 02110",
+            )
+
+        detail_cols = st.columns(2)
+        with detail_cols[0]:
             st.selectbox(
                 "Type de marchandise",
                 options=cargo_options,
@@ -2359,17 +2567,13 @@ def render_announcement_form() -> None:
                 options=[""] + EQUIPMENT_OPTIONS,
                 key="announcement_equipment",
             )
-        with col2:
-            st.text_input(
-                "Lieu de livraison",
-                key="announcement_deliveryCity",
-                help="Exemple: Boston, MA",
-            )
+            st.number_input("Nombre de voyages disponibles", min_value=1, step=1, key="announcement_tripsTotal")
+        with detail_cols[1]:
             st.date_input("Date de chargement", key="announcement_loadingDate")
             st.date_input("Date de livraison", key="announcement_deliveryDate")
-            st.number_input("Nombre de voyages disponibles", min_value=1, step=1, key="announcement_tripsTotal")
             st.number_input("Prix/voyage (CAD)", min_value=0, step=50, key="announcement_budget")
-            st.text_area("Consignes speciales", key="announcement_notes", height=110)
+
+        st.text_area("Consignes speciales", key="announcement_notes", height=110)
 
         action_col1, action_col2 = st.columns(2)
         with action_col1:
@@ -2391,8 +2595,12 @@ def render_announcement_form() -> None:
         if not all(
             [
                 normalize_text(st.session_state.announcement_title),
+                normalize_text(st.session_state.announcement_pickupAddress),
                 normalize_text(st.session_state.announcement_pickupCity),
+                normalize_text(st.session_state.announcement_pickupPostalCode),
+                normalize_text(st.session_state.announcement_deliveryAddress),
                 normalize_text(st.session_state.announcement_deliveryCity),
+                normalize_text(st.session_state.announcement_deliveryPostalCode),
                 normalize_text(cargo_value),
                 normalize_text(st.session_state.announcement_equipment),
                 st.session_state.announcement_loadingDate,
@@ -2404,8 +2612,12 @@ def render_announcement_form() -> None:
             announcement = {
                 "id": f"user-{datetime.now().timestamp()}",
                 "title": normalize_text(st.session_state.announcement_title),
+                "pickupAddress": normalize_text(st.session_state.announcement_pickupAddress),
                 "pickupCity": normalize_text(st.session_state.announcement_pickupCity),
+                "pickupPostalCode": normalize_text(st.session_state.announcement_pickupPostalCode),
+                "deliveryAddress": normalize_text(st.session_state.announcement_deliveryAddress),
                 "deliveryCity": normalize_text(st.session_state.announcement_deliveryCity),
+                "deliveryPostalCode": normalize_text(st.session_state.announcement_deliveryPostalCode),
                 "cargoType": normalize_text(cargo_value),
                 "equipment": normalize_text(st.session_state.announcement_equipment),
                 "loadingDate": st.session_state.announcement_loadingDate.isoformat(),
@@ -2413,6 +2625,7 @@ def render_announcement_form() -> None:
                 "tripsTotal": int(st.session_state.announcement_tripsTotal),
                 "remainingTrips": int(st.session_state.announcement_tripsTotal),
                 "budget": int(st.session_state.announcement_budget),
+                "expiredAt": "",
                 "notes": normalize_text(st.session_state.announcement_notes),
                 "companyName": st.session_state.company_profile["legalName"],
             }
@@ -2426,7 +2639,12 @@ def render_announcement_form() -> None:
 
 
 def render_company_announcement_card(announcement: dict[str, Any]) -> None:
-    status = "Active" if int(announcement["remainingTrips"]) > 0 else "Completee"
+    if is_announcement_expired(announcement):
+        status = "Expirée"
+    elif int(announcement["remainingTrips"]) > 0:
+        status = "Active"
+    else:
+        status = "Complétée"
     status_class = "status-pill" if status == "Active" else "status-pill ai"
     st.markdown(
         f"""
@@ -2440,6 +2658,8 @@ def render_company_announcement_card(announcement: dict[str, Any]) -> None:
           </div>
           <div class="route-row">{announcement['pickupCity']} -> {announcement['deliveryCity']}</div>
           <div class="small-copy">
+            Chargement exact: <strong>{format_exact_location(announcement.get('pickupAddress'), announcement.get('pickupCity'), announcement.get('pickupPostalCode'))}</strong><br>
+            Livraison exacte: <strong>{format_exact_location(announcement.get('deliveryAddress'), announcement.get('deliveryCity'), announcement.get('deliveryPostalCode'))}</strong><br>
             Marchandise: <strong>{announcement['cargoType']}</strong><br>
             Equipement: <strong>{announcement['equipment']}</strong><br>
             Livraison: <strong>{format_date(get_delivery_date(announcement))}</strong><br>
@@ -2452,7 +2672,7 @@ def render_company_announcement_card(announcement: dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
     button_cols = st.columns(2)
-    if announcement["remainingTrips"] > 0:
+    if is_announcement_active(announcement):
         with button_cols[0]:
             if st.button(f"Attribuer 1 voyage - {announcement['id']}", key=f"assign-1-{announcement['id']}", use_container_width=True):
                 announcement["remainingTrips"] = max(0, int(announcement["remainingTrips"]) - 1)
@@ -2553,6 +2773,8 @@ def render_map_proposal_panel(
           <div class="route-row">{announcement['pickupCity']} -> {announcement['deliveryCity']}</div>
           <span class="score-pill score-local">Compatibilite locale {local_score}%</span>
           <div class="small-copy" style="margin-top:0.65rem;">
+            Lieu exact de chargement: <strong>{format_exact_location(announcement.get('pickupAddress'), announcement.get('pickupCity'), announcement.get('pickupPostalCode'))}</strong><br>
+            Lieu exact de livraison: <strong>{format_exact_location(announcement.get('deliveryAddress'), announcement.get('deliveryCity'), announcement.get('deliveryPostalCode'))}</strong><br>
             Chargement: <strong>{format_date(announcement['loadingDate'])}</strong><br>
             Livraison: <strong>{format_date(get_delivery_date(announcement))}</strong><br>
             Marchandise: <strong>{announcement['cargoType']}</strong><br>
@@ -2771,6 +2993,7 @@ def render_carrier_result_card(result: dict[str, Any]) -> None:
 def main() -> None:
     inject_styles()
     init_state()
+    expire_outdated_announcements()
     apply_pending_widget_syncs()
     render_top_bar()
 
