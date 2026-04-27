@@ -3,3 +3,6 @@ node_modules
 *.log
 __pycache__/
 *.pyc
+loadsearch.db
+loadsearch.db-*
+loadsearch_uploads/

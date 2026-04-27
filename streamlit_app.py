@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import hmac
+import html
 import json
 import os
+import secrets
+import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,8 +19,13 @@ import streamlit as st
 
 APP_NAME = "LoadSearch"
 ENV_PATH = Path(__file__).with_name(".env")
+DB_PATH = Path(__file__).with_name("loadsearch.db")
+UPLOADS_DIR = Path(__file__).with_name("loadsearch_uploads")
 OTHER_CARGO_VALUE = "__other_cargo__"
 MAP_BASE_STYLE = pdk.map_styles.CARTO_ROAD
+PASSWORD_HASH_NAME = "pbkdf2_sha256"
+PASSWORD_ITERATIONS = 260_000
+RATABLE_REQUEST_STATUSES = {"accepted"}
 
 EQUIPMENT_OPTIONS = [
     "Flatbed",
@@ -105,6 +115,1080 @@ def load_env_file(file_path: Path) -> None:
 load_env_file(ENV_PATH)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+def empty_company_profile() -> dict[str, Any]:
+    return {
+        "legalName": "",
+        "businessNumber": "",
+        "contactName": "",
+        "email": "",
+        "phone": "",
+        "city": "",
+        "province": "",
+        "industry": "",
+    }
+
+
+def empty_carrier_profile() -> dict[str, Any]:
+    return {
+        "transportCompany": "",
+        "businessNumber": "",
+        "insuranceNumber": "",
+        "contactName": "",
+        "email": "",
+        "phone": "",
+        "fleetSize": 1,
+        "regions": "",
+        "equipmentTypes": [],
+    }
+
+
+def get_db_connection() -> sqlite3.Connection:
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def init_database() -> None:
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                role TEXT NOT NULL CHECK(role IN ('company', 'carrier')),
+                business_name TEXT NOT NULL,
+                legal_name TEXT NOT NULL DEFAULT '',
+                transport_company TEXT NOT NULL DEFAULT '',
+                business_number TEXT NOT NULL DEFAULT '',
+                insurance_number TEXT NOT NULL DEFAULT '',
+                contact_name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                phone TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                city TEXT NOT NULL DEFAULT '',
+                province TEXT NOT NULL DEFAULT '',
+                industry TEXT NOT NULL DEFAULT '',
+                fleet_size INTEGER NOT NULL DEFAULT 1,
+                regions TEXT NOT NULL DEFAULT '',
+                equipment_types TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS announcements (
+                id TEXT PRIMARY KEY,
+                company_account_id TEXT NOT NULL DEFAULT '',
+                company_name TEXT NOT NULL,
+                title TEXT NOT NULL,
+                pickup_address TEXT NOT NULL DEFAULT '',
+                pickup_city TEXT NOT NULL DEFAULT '',
+                pickup_postal_code TEXT NOT NULL DEFAULT '',
+                delivery_address TEXT NOT NULL DEFAULT '',
+                delivery_city TEXT NOT NULL DEFAULT '',
+                delivery_postal_code TEXT NOT NULL DEFAULT '',
+                cargo_type TEXT NOT NULL DEFAULT '',
+                equipment TEXT NOT NULL DEFAULT '',
+                loading_date TEXT NOT NULL DEFAULT '',
+                delivery_date TEXT NOT NULL DEFAULT '',
+                trips_total INTEGER NOT NULL DEFAULT 1,
+                remaining_trips INTEGER NOT NULL DEFAULT 1,
+                budget INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                expired_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS service_requests (
+                id TEXT PRIMARY KEY,
+                announcement_id TEXT NOT NULL,
+                announcement_title TEXT NOT NULL,
+                company_account_id TEXT NOT NULL DEFAULT '',
+                company_name TEXT NOT NULL,
+                carrier_account_id TEXT NOT NULL DEFAULT '',
+                carrier_name TEXT NOT NULL,
+                carrier_business_number TEXT NOT NULL DEFAULT '',
+                carrier_insurance_number TEXT NOT NULL DEFAULT '',
+                carrier_contact_name TEXT NOT NULL DEFAULT '',
+                carrier_phone TEXT NOT NULL DEFAULT '',
+                carrier_email TEXT NOT NULL DEFAULT '',
+                carrier_fleet_size INTEGER NOT NULL DEFAULT 1,
+                carrier_equipment_types TEXT NOT NULL DEFAULT '[]',
+                requested_trips INTEGER NOT NULL DEFAULT 1,
+                message TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                decision_message TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id TEXT PRIMARY KEY,
+                recipient_role TEXT NOT NULL,
+                recipient_name TEXT NOT NULL DEFAULT '',
+                recipient_account_id TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                related_announcement_id TEXT NOT NULL DEFAULT '',
+                related_request_id TEXT NOT NULL DEFAULT '',
+                related_alert_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                sender_role TEXT NOT NULL,
+                sender_name TEXT NOT NULL DEFAULT '',
+                sender_account_id TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                id TEXT PRIMARY KEY,
+                owner_type TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT '',
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                content_type TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS carrier_alerts (
+                id TEXT PRIMARY KEY,
+                carrier_account_id TEXT NOT NULL,
+                carrier_name TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                pickup_city TEXT NOT NULL DEFAULT '',
+                delivery_city TEXT NOT NULL DEFAULT '',
+                cargo_type TEXT NOT NULL DEFAULT '',
+                equipment TEXT NOT NULL DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ratings (
+                id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                announcement_id TEXT NOT NULL DEFAULT '',
+                reviewer_account_id TEXT NOT NULL,
+                reviewer_role TEXT NOT NULL CHECK(reviewer_role IN ('company', 'carrier')),
+                reviewer_name TEXT NOT NULL DEFAULT '',
+                reviewee_account_id TEXT NOT NULL,
+                reviewee_role TEXT NOT NULL CHECK(reviewee_role IN ('company', 'carrier')),
+                reviewee_name TEXT NOT NULL DEFAULT '',
+                score INTEGER NOT NULL CHECK(score >= 1 AND score <= 5),
+                comment TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ratings_request_reviewer_reviewee
+            ON ratings (request_id, reviewer_account_id, reviewee_account_id)
+            """
+        )
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    derived_key = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        PASSWORD_ITERATIONS,
+    )
+    return f"{PASSWORD_HASH_NAME}${PASSWORD_ITERATIONS}${salt}${derived_key.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations, salt, expected_hex = stored_hash.split("$", 3)
+    except ValueError:
+        return False
+
+    if algorithm != PASSWORD_HASH_NAME:
+        return False
+
+    derived_key = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        int(iterations),
+    )
+    return hmac.compare_digest(derived_key.hex(), expected_hex)
+
+
+def parse_equipment_types(raw_value: Any) -> list[str]:
+    try:
+        payload = json.loads(raw_value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [normalize_text(item) for item in payload if normalize_text(item)]
+
+
+def serialize_account_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    equipment_types = parse_equipment_types(row["equipment_types"])
+    business_name = normalize_text(row["business_name"])
+    legal_name = normalize_text(row["legal_name"]) or business_name
+    transport_company = normalize_text(row["transport_company"]) or business_name
+
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "businessName": business_name,
+        "legalName": legal_name,
+        "transportCompany": transport_company,
+        "businessNumber": normalize_text(row["business_number"]),
+        "insuranceNumber": normalize_text(row["insurance_number"]),
+        "contactName": normalize_text(row["contact_name"]),
+        "email": normalize_text(row["email"]),
+        "phone": normalize_text(row["phone"]),
+        "city": normalize_text(row["city"]),
+        "province": normalize_text(row["province"]),
+        "industry": normalize_text(row["industry"]),
+        "fleetSize": max(1, int(row["fleet_size"] or 1)),
+        "regions": normalize_text(row["regions"]),
+        "equipmentTypes": equipment_types,
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def get_user_row_by_email(email: str) -> sqlite3.Row | None:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        return connection.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+
+
+def get_account_by_email(email: str) -> dict[str, Any] | None:
+    return serialize_account_row(get_user_row_by_email(email))
+
+
+def get_account_by_id(account_id: str) -> dict[str, Any] | None:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (normalize_text(account_id),),
+        ).fetchone()
+    return serialize_account_row(row)
+
+
+def create_account_record(
+    *,
+    role: str,
+    business_name: str,
+    contact_name: str,
+    email: str,
+    phone: str,
+    password: str,
+    insurance_number: str = "",
+) -> dict[str, Any]:
+    account_id = f"account-{datetime.now().timestamp()}"
+    now = datetime.now().isoformat(timespec="seconds")
+    normalized_business_name = normalize_text(business_name)
+    normalized_contact_name = normalize_text(contact_name)
+    normalized_email = normalize_email(email)
+    normalized_phone = normalize_text(phone)
+    normalized_insurance = normalize_text(insurance_number)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO users (
+                id,
+                role,
+                business_name,
+                legal_name,
+                transport_company,
+                business_number,
+                insurance_number,
+                contact_name,
+                email,
+                phone,
+                password_hash,
+                city,
+                province,
+                industry,
+                fleet_size,
+                regions,
+                equipment_types,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                role,
+                normalized_business_name,
+                normalized_business_name if role == "company" else "",
+                normalized_business_name if role == "carrier" else "",
+                "",
+                normalized_insurance if role == "carrier" else "",
+                normalized_contact_name,
+                normalized_email,
+                normalized_phone,
+                hash_password(password),
+                "",
+                "",
+                "",
+                1,
+                "",
+                "[]",
+                now,
+                now,
+            ),
+        )
+
+    account = get_account_by_id(account_id)
+    if not account:
+        raise RuntimeError("Le compte vient d'etre cree mais n'a pas pu etre relu.")
+    return account
+
+
+def update_company_profile_record(account_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE users
+            SET
+                business_name = ?,
+                legal_name = ?,
+                business_number = ?,
+                contact_name = ?,
+                email = ?,
+                phone = ?,
+                city = ?,
+                province = ?,
+                industry = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalize_text(profile["legalName"]),
+                normalize_text(profile["legalName"]),
+                normalize_text(profile["businessNumber"]),
+                normalize_text(profile["contactName"]),
+                normalize_email(profile["email"]),
+                normalize_text(profile["phone"]),
+                normalize_text(profile["city"]),
+                normalize_text(profile["province"]),
+                normalize_text(profile["industry"]),
+                now,
+                normalize_text(account_id),
+            ),
+        )
+
+    account = get_account_by_id(account_id)
+    if not account:
+        raise RuntimeError("Le profil entreprise n'a pas pu etre relu.")
+    return account
+
+
+def update_carrier_profile_record(account_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now().isoformat(timespec="seconds")
+    equipment_payload = json.dumps(profile["equipmentTypes"], ensure_ascii=True)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE users
+            SET
+                business_name = ?,
+                transport_company = ?,
+                business_number = ?,
+                insurance_number = ?,
+                contact_name = ?,
+                email = ?,
+                phone = ?,
+                fleet_size = ?,
+                regions = ?,
+                equipment_types = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalize_text(profile["transportCompany"]),
+                normalize_text(profile["transportCompany"]),
+                normalize_text(profile["businessNumber"]),
+                normalize_text(profile["insuranceNumber"]),
+                normalize_text(profile["contactName"]),
+                normalize_email(profile["email"]),
+                normalize_text(profile["phone"]),
+                max(1, int(profile["fleetSize"])),
+                normalize_text(profile["regions"]),
+                equipment_payload,
+                now,
+                normalize_text(account_id),
+            ),
+        )
+
+    account = get_account_by_id(account_id)
+    if not account:
+        raise RuntimeError("Le profil transporteur n'a pas pu etre relu.")
+    return account
+
+
+def serialize_announcement_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "companyAccountId": normalize_text(row["company_account_id"]),
+        "companyName": normalize_text(row["company_name"]),
+        "title": normalize_text(row["title"]),
+        "pickupAddress": normalize_text(row["pickup_address"]),
+        "pickupCity": normalize_text(row["pickup_city"]),
+        "pickupPostalCode": normalize_text(row["pickup_postal_code"]),
+        "deliveryAddress": normalize_text(row["delivery_address"]),
+        "deliveryCity": normalize_text(row["delivery_city"]),
+        "deliveryPostalCode": normalize_text(row["delivery_postal_code"]),
+        "cargoType": normalize_text(row["cargo_type"]),
+        "equipment": normalize_text(row["equipment"]),
+        "loadingDate": normalize_text(row["loading_date"]),
+        "deliveryDate": normalize_text(row["delivery_date"]),
+        "tripsTotal": int(row["trips_total"] or 1),
+        "remainingTrips": int(row["remaining_trips"] or 0),
+        "budget": int(row["budget"] or 0),
+        "notes": normalize_text(row["notes"]),
+        "expiredAt": normalize_text(row["expired_at"]),
+        "createdAt": normalize_text(row["created_at"]),
+        "updatedAt": normalize_text(row["updated_at"]),
+    }
+
+
+def serialize_service_request_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "announcementId": normalize_text(row["announcement_id"]),
+        "announcementTitle": normalize_text(row["announcement_title"]),
+        "companyAccountId": normalize_text(row["company_account_id"]),
+        "companyName": normalize_text(row["company_name"]),
+        "carrierAccountId": normalize_text(row["carrier_account_id"]),
+        "carrierName": normalize_text(row["carrier_name"]),
+        "carrierBusinessNumber": normalize_text(row["carrier_business_number"]),
+        "carrierInsuranceNumber": normalize_text(row["carrier_insurance_number"]),
+        "carrierContactName": normalize_text(row["carrier_contact_name"]),
+        "carrierPhone": normalize_text(row["carrier_phone"]),
+        "carrierEmail": normalize_text(row["carrier_email"]),
+        "carrierFleetSize": int(row["carrier_fleet_size"] or 1),
+        "carrierEquipmentTypes": parse_equipment_types(row["carrier_equipment_types"]),
+        "requestedTrips": int(row["requested_trips"] or 1),
+        "message": normalize_text(row["message"]),
+        "status": normalize_text(row["status"]),
+        "decisionMessage": normalize_text(row["decision_message"]),
+        "createdAt": normalize_text(row["created_at"]),
+        "updatedAt": normalize_text(row["updated_at"]),
+    }
+
+
+def serialize_notification_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "recipientRole": normalize_text(row["recipient_role"]),
+        "recipientName": normalize_text(row["recipient_name"]),
+        "recipientAccountId": normalize_text(row["recipient_account_id"]),
+        "title": normalize_text(row["title"]),
+        "message": normalize_text(row["message"]),
+        "relatedAnnouncementId": normalize_text(row["related_announcement_id"]),
+        "relatedRequestId": normalize_text(row["related_request_id"]),
+        "relatedAlertId": normalize_text(row["related_alert_id"]),
+        "createdAt": normalize_text(row["created_at"]),
+    }
+
+
+def serialize_message_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "requestId": normalize_text(row["request_id"]),
+        "senderRole": normalize_text(row["sender_role"]),
+        "senderName": normalize_text(row["sender_name"]),
+        "senderAccountId": normalize_text(row["sender_account_id"]),
+        "body": normalize_text(row["body"]),
+        "createdAt": normalize_text(row["created_at"]),
+    }
+
+
+def serialize_document_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "ownerType": normalize_text(row["owner_type"]),
+        "ownerId": normalize_text(row["owner_id"]),
+        "accountId": normalize_text(row["account_id"]),
+        "role": normalize_text(row["role"]),
+        "fileName": normalize_text(row["file_name"]),
+        "filePath": normalize_text(row["file_path"]),
+        "contentType": normalize_text(row["content_type"]),
+        "description": normalize_text(row["description"]),
+        "createdAt": normalize_text(row["created_at"]),
+    }
+
+
+def serialize_alert_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "carrierAccountId": normalize_text(row["carrier_account_id"]),
+        "carrierName": normalize_text(row["carrier_name"]),
+        "title": normalize_text(row["title"]),
+        "pickupCity": normalize_text(row["pickup_city"]),
+        "deliveryCity": normalize_text(row["delivery_city"]),
+        "cargoType": normalize_text(row["cargo_type"]),
+        "equipment": normalize_text(row["equipment"]),
+        "isActive": bool(int(row["is_active"] or 0)),
+        "createdAt": normalize_text(row["created_at"]),
+        "updatedAt": normalize_text(row["updated_at"]),
+    }
+
+
+def serialize_rating_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": row["id"],
+        "requestId": normalize_text(row["request_id"]),
+        "announcementId": normalize_text(row["announcement_id"]),
+        "reviewerAccountId": normalize_text(row["reviewer_account_id"]),
+        "reviewerRole": normalize_text(row["reviewer_role"]),
+        "reviewerName": normalize_text(row["reviewer_name"]),
+        "revieweeAccountId": normalize_text(row["reviewee_account_id"]),
+        "revieweeRole": normalize_text(row["reviewee_role"]),
+        "revieweeName": normalize_text(row["reviewee_name"]),
+        "score": max(1, min(5, int(row["score"] or 1))),
+        "comment": normalize_text(row["comment"]),
+        "createdAt": normalize_text(row["created_at"]),
+    }
+
+
+def list_announcements_from_db() -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM announcements ORDER BY created_at ASC"
+        ).fetchall()
+    return [item for item in (serialize_announcement_row(row) for row in rows) if item]
+
+
+def list_service_requests_from_db() -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM service_requests ORDER BY created_at ASC"
+        ).fetchall()
+    return [item for item in (serialize_service_request_row(row) for row in rows) if item]
+
+
+def list_notifications_from_db() -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM notifications ORDER BY created_at ASC"
+        ).fetchall()
+    return [item for item in (serialize_notification_row(row) for row in rows) if item]
+
+
+def list_messages_for_request(request_id: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM messages WHERE request_id = ? ORDER BY created_at ASC",
+            (normalize_text(request_id),),
+        ).fetchall()
+    return [item for item in (serialize_message_row(row) for row in rows) if item]
+
+
+def list_documents(owner_type: str, owner_id: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM documents
+            WHERE owner_type = ? AND owner_id = ?
+            ORDER BY created_at DESC
+            """,
+            (normalize_text(owner_type), normalize_text(owner_id)),
+        ).fetchall()
+    return [item for item in (serialize_document_row(row) for row in rows) if item]
+
+
+def list_carrier_alerts(carrier_account_id: str, *, only_active: bool = False) -> list[dict[str, Any]]:
+    query = "SELECT * FROM carrier_alerts WHERE carrier_account_id = ?"
+    params: list[Any] = [normalize_text(carrier_account_id)]
+    if only_active:
+        query += " AND is_active = 1"
+    query += " ORDER BY created_at DESC"
+    with get_db_connection() as connection:
+        rows = connection.execute(query, tuple(params)).fetchall()
+    return [item for item in (serialize_alert_row(row) for row in rows) if item]
+
+
+def list_ratings_from_db() -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM ratings ORDER BY created_at DESC"
+        ).fetchall()
+    return [item for item in (serialize_rating_row(row) for row in rows) if item]
+
+
+def load_persisted_data_into_session() -> None:
+    st.session_state.announcements = list_announcements_from_db()
+    st.session_state.service_requests = list_service_requests_from_db()
+    st.session_state.notifications = list_notifications_from_db()
+    st.session_state.ratings = list_ratings_from_db()
+
+
+def safe_file_name(file_name: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in "._-" else "_" for char in file_name)
+    return cleaned or "document"
+
+
+def save_uploaded_documents(
+    uploaded_files: list[Any],
+    *,
+    owner_type: str,
+    owner_id: str,
+    account_id: str,
+    role: str,
+    description: str,
+) -> int:
+    files = [item for item in (uploaded_files or []) if item is not None]
+    if not files:
+        return 0
+
+    UPLOADS_DIR.mkdir(exist_ok=True)
+    created_at = datetime.now().isoformat(timespec="seconds")
+    saved_count = 0
+
+    with get_db_connection() as connection:
+        for uploaded_file in files:
+            file_name = safe_file_name(getattr(uploaded_file, "name", "document"))
+            unique_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(4)}-{file_name}"
+            file_path = UPLOADS_DIR / unique_name
+            file_path.write_bytes(uploaded_file.getbuffer())
+            document_id = f"doc-{datetime.now().timestamp()}-{secrets.token_hex(3)}"
+            connection.execute(
+                """
+                INSERT INTO documents (
+                    id, owner_type, owner_id, account_id, role, file_name, file_path,
+                    content_type, description, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    document_id,
+                    normalize_text(owner_type),
+                    normalize_text(owner_id),
+                    normalize_text(account_id),
+                    normalize_text(role),
+                    file_name,
+                    str(file_path),
+                    normalize_text(getattr(uploaded_file, "type", "")),
+                    normalize_text(description),
+                    created_at,
+                ),
+            )
+            saved_count += 1
+
+    return saved_count
+
+
+def create_announcement_record(announcement: dict[str, Any]) -> dict[str, Any]:
+    created_at = normalize_text(announcement.get("createdAt")) or datetime.now().isoformat(timespec="seconds")
+    updated_at = normalize_text(announcement.get("updatedAt")) or created_at
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO announcements (
+                id, company_account_id, company_name, title, pickup_address, pickup_city,
+                pickup_postal_code, delivery_address, delivery_city, delivery_postal_code,
+                cargo_type, equipment, loading_date, delivery_date, trips_total,
+                remaining_trips, budget, notes, expired_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalize_text(announcement["id"]),
+                normalize_text(announcement.get("companyAccountId")),
+                normalize_text(announcement["companyName"]),
+                normalize_text(announcement["title"]),
+                normalize_text(announcement["pickupAddress"]),
+                normalize_text(announcement["pickupCity"]),
+                normalize_text(announcement["pickupPostalCode"]),
+                normalize_text(announcement["deliveryAddress"]),
+                normalize_text(announcement["deliveryCity"]),
+                normalize_text(announcement["deliveryPostalCode"]),
+                normalize_text(announcement["cargoType"]),
+                normalize_text(announcement["equipment"]),
+                normalize_text(announcement["loadingDate"]),
+                normalize_text(announcement["deliveryDate"]),
+                int(announcement["tripsTotal"]),
+                int(announcement["remainingTrips"]),
+                int(announcement["budget"]),
+                normalize_text(announcement["notes"]),
+                normalize_text(announcement.get("expiredAt")),
+                created_at,
+                updated_at,
+            ),
+        )
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM announcements WHERE id = ?",
+            (normalize_text(announcement["id"]),),
+        ).fetchone()
+    saved = serialize_announcement_row(row)
+    if not saved:
+        raise RuntimeError("L'annonce n'a pas pu etre relue.")
+    return saved
+
+
+def update_announcement_record(announcement_id: str, **fields: Any) -> dict[str, Any]:
+    if not fields:
+        with get_db_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM announcements WHERE id = ?",
+                (normalize_text(announcement_id),),
+            ).fetchone()
+        saved = serialize_announcement_row(row)
+        if not saved:
+            raise RuntimeError("Annonce introuvable.")
+        return saved
+
+    columns = {
+        "companyAccountId": "company_account_id",
+        "companyName": "company_name",
+        "title": "title",
+        "pickupAddress": "pickup_address",
+        "pickupCity": "pickup_city",
+        "pickupPostalCode": "pickup_postal_code",
+        "deliveryAddress": "delivery_address",
+        "deliveryCity": "delivery_city",
+        "deliveryPostalCode": "delivery_postal_code",
+        "cargoType": "cargo_type",
+        "equipment": "equipment",
+        "loadingDate": "loading_date",
+        "deliveryDate": "delivery_date",
+        "tripsTotal": "trips_total",
+        "remainingTrips": "remaining_trips",
+        "budget": "budget",
+        "notes": "notes",
+        "expiredAt": "expired_at",
+        "updatedAt": "updated_at",
+    }
+    assignments = []
+    params: list[Any] = []
+    for key, value in fields.items():
+        column = columns.get(key)
+        if not column:
+            continue
+        assignments.append(f"{column} = ?")
+        if key in {"tripsTotal", "remainingTrips", "budget"}:
+            params.append(int(value))
+        else:
+            params.append(normalize_text(value))
+    assignments.append("updated_at = ?")
+    params.append(datetime.now().isoformat(timespec="seconds"))
+    params.append(normalize_text(announcement_id))
+
+    with get_db_connection() as connection:
+        connection.execute(
+            f"UPDATE announcements SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
+        )
+        row = connection.execute(
+            "SELECT * FROM announcements WHERE id = ?",
+            (normalize_text(announcement_id),),
+        ).fetchone()
+    saved = serialize_announcement_row(row)
+    if not saved:
+        raise RuntimeError("Annonce introuvable.")
+    return saved
+
+
+def create_service_request_record(service_request: dict[str, Any]) -> dict[str, Any]:
+    created_at = normalize_text(service_request.get("createdAt")) or datetime.now().isoformat(timespec="seconds")
+    updated_at = normalize_text(service_request.get("updatedAt")) or created_at
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO service_requests (
+                id, announcement_id, announcement_title, company_account_id, company_name,
+                carrier_account_id, carrier_name, carrier_business_number, carrier_insurance_number,
+                carrier_contact_name, carrier_phone, carrier_email, carrier_fleet_size,
+                carrier_equipment_types, requested_trips, message, status, decision_message,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalize_text(service_request["id"]),
+                normalize_text(service_request["announcementId"]),
+                normalize_text(service_request["announcementTitle"]),
+                normalize_text(service_request.get("companyAccountId")),
+                normalize_text(service_request["companyName"]),
+                normalize_text(service_request.get("carrierAccountId")),
+                normalize_text(service_request["carrierName"]),
+                normalize_text(service_request["carrierBusinessNumber"]),
+                normalize_text(service_request["carrierInsuranceNumber"]),
+                normalize_text(service_request["carrierContactName"]),
+                normalize_text(service_request["carrierPhone"]),
+                normalize_text(service_request["carrierEmail"]),
+                int(service_request["carrierFleetSize"]),
+                json.dumps(service_request["carrierEquipmentTypes"], ensure_ascii=True),
+                int(service_request["requestedTrips"]),
+                normalize_text(service_request["message"]),
+                normalize_text(service_request["status"]),
+                normalize_text(service_request["decisionMessage"]),
+                created_at,
+                updated_at,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM service_requests WHERE id = ?",
+            (normalize_text(service_request["id"]),),
+        ).fetchone()
+    saved = serialize_service_request_row(row)
+    if not saved:
+        raise RuntimeError("La proposition n'a pas pu etre relue.")
+    return saved
+
+
+def update_service_request_record(request_id: str, **fields: Any) -> dict[str, Any]:
+    columns = {
+        "status": "status",
+        "decisionMessage": "decision_message",
+        "message": "message",
+        "requestedTrips": "requested_trips",
+    }
+    assignments = []
+    params: list[Any] = []
+    for key, value in fields.items():
+        column = columns.get(key)
+        if not column:
+            continue
+        assignments.append(f"{column} = ?")
+        if key == "requestedTrips":
+            params.append(int(value))
+        else:
+            params.append(normalize_text(value))
+    assignments.append("updated_at = ?")
+    params.append(datetime.now().isoformat(timespec="seconds"))
+    params.append(normalize_text(request_id))
+
+    with get_db_connection() as connection:
+        connection.execute(
+            f"UPDATE service_requests SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
+        )
+        row = connection.execute(
+            "SELECT * FROM service_requests WHERE id = ?",
+            (normalize_text(request_id),),
+        ).fetchone()
+    saved = serialize_service_request_row(row)
+    if not saved:
+        raise RuntimeError("Proposition introuvable.")
+    return saved
+
+
+def create_message_record(
+    request_id: str,
+    *,
+    sender_role: str,
+    sender_name: str,
+    sender_account_id: str,
+    body: str,
+) -> dict[str, Any]:
+    message_id = f"msg-{datetime.now().timestamp()}-{secrets.token_hex(3)}"
+    created_at = datetime.now().isoformat(timespec="seconds")
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO messages (
+                id, request_id, sender_role, sender_name, sender_account_id, body, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                normalize_text(request_id),
+                normalize_text(sender_role),
+                normalize_text(sender_name),
+                normalize_text(sender_account_id),
+                normalize_text(body),
+                created_at,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    saved = serialize_message_row(row)
+    if not saved:
+        raise RuntimeError("Message introuvable apres creation.")
+    return saved
+
+
+def create_carrier_alert_record(alert: dict[str, Any]) -> dict[str, Any]:
+    alert_id = normalize_text(alert.get("id")) or f"alert-{datetime.now().timestamp()}-{secrets.token_hex(3)}"
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO carrier_alerts (
+                id, carrier_account_id, carrier_name, title, pickup_city,
+                delivery_city, cargo_type, equipment, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                alert_id,
+                normalize_text(alert["carrierAccountId"]),
+                normalize_text(alert["carrierName"]),
+                normalize_text(alert["title"]),
+                normalize_text(alert["pickupCity"]),
+                normalize_text(alert["deliveryCity"]),
+                normalize_text(alert["cargoType"]),
+                normalize_text(alert["equipment"]),
+                1 if alert.get("isActive", True) else 0,
+                now,
+                now,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM carrier_alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+    saved = serialize_alert_row(row)
+    if not saved:
+        raise RuntimeError("Alerte introuvable apres creation.")
+    return saved
+
+
+def create_rating_record(rating: dict[str, Any]) -> dict[str, Any]:
+    rating_id = normalize_text(rating.get("id")) or f"rating-{datetime.now().timestamp()}-{secrets.token_hex(3)}"
+    created_at = normalize_text(rating.get("createdAt")) or datetime.now().isoformat(timespec="seconds")
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO ratings (
+                id, request_id, announcement_id, reviewer_account_id, reviewer_role,
+                reviewer_name, reviewee_account_id, reviewee_role, reviewee_name,
+                score, comment, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rating_id,
+                normalize_text(rating["requestId"]),
+                normalize_text(rating.get("announcementId")),
+                normalize_text(rating["reviewerAccountId"]),
+                normalize_text(rating["reviewerRole"]),
+                normalize_text(rating["reviewerName"]),
+                normalize_text(rating["revieweeAccountId"]),
+                normalize_text(rating["revieweeRole"]),
+                normalize_text(rating["revieweeName"]),
+                max(1, min(5, int(rating["score"]))),
+                normalize_text(rating.get("comment")),
+                created_at,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM ratings WHERE id = ?",
+            (rating_id,),
+        ).fetchone()
+    saved = serialize_rating_row(row)
+    if not saved:
+        raise RuntimeError("L'evaluation n'a pas pu etre relue.")
+    return saved
+
+
+def delete_carrier_alert_record(alert_id: str) -> None:
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM carrier_alerts WHERE id = ?",
+            (normalize_text(alert_id),),
+        )
+
+
+def notification_exists(
+    *,
+    recipient_account_id: str,
+    related_announcement_id: str,
+    related_alert_id: str,
+) -> bool:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id FROM notifications
+            WHERE recipient_account_id = ? AND related_announcement_id = ? AND related_alert_id = ?
+            LIMIT 1
+            """,
+            (
+                normalize_text(recipient_account_id),
+                normalize_text(related_announcement_id),
+                normalize_text(related_alert_id),
+            ),
+        ).fetchone()
+    return row is not None
+
+
+def reset_demo_data() -> None:
+    with get_db_connection() as connection:
+        for table_name in [
+            "ratings",
+            "messages",
+            "documents",
+            "notifications",
+            "service_requests",
+            "carrier_alerts",
+            "announcements",
+            "users",
+        ]:
+            connection.execute(f"DELETE FROM {table_name}")
+
+    if UPLOADS_DIR.exists():
+        for item in UPLOADS_DIR.iterdir():
+            if item.is_file():
+                item.unlink()
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -234,6 +1318,43 @@ def inject_styles() -> None:
           font-size: 0.9rem;
           text-transform: uppercase;
           letter-spacing: 0.08em;
+        }
+        .policy-footer {
+          margin: 2.4rem auto 0;
+          max-width: 980px;
+          padding-top: 0.75rem;
+          border-top: 1px solid rgba(96, 165, 250, 0.12);
+          color: #89a4c7;
+          font-size: 0.78rem;
+          line-height: 1.65;
+        }
+        .policy-footer details {
+          cursor: pointer;
+        }
+        .policy-footer summary {
+          list-style: none;
+          color: #9fb6d9;
+          font-size: 0.76rem;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+        .policy-footer summary::-webkit-details-marker {
+          display: none;
+        }
+        .policy-copy {
+          margin-top: 0.7rem;
+          color: #7e97b8;
+        }
+        .policy-link {
+          display: inline-block;
+          margin-top: 0.45rem;
+          color: #93c5fd;
+          text-decoration: none;
+          font-size: 0.78rem;
+        }
+        .policy-link:hover {
+          color: #bfdbfe;
+          text-decoration: underline;
         }
         .auth-action-bar {
           max-width: 720px;
@@ -375,6 +1496,32 @@ def inject_styles() -> None:
           background: rgba(29, 78, 216, 0.36);
           color: #e5f2ff;
         }
+        .rating-summary {
+          display: flex;
+          align-items: center;
+          gap: 0.55rem;
+          flex-wrap: wrap;
+          margin: 0.35rem 0 0.75rem;
+          color: #dbeafe;
+          font-size: 0.95rem;
+        }
+        .rating-stars {
+          color: #fbbf24;
+          font-size: 1rem;
+          letter-spacing: 0.05em;
+        }
+        .rating-stars-off {
+          color: rgba(148, 163, 184, 0.55);
+        }
+        .review-card {
+          border-bottom: 1px solid rgba(30, 64, 175, 0.22);
+          padding: 0.7rem 0;
+        }
+        .review-meta {
+          color: #8ea6c7;
+          font-size: 0.84rem;
+          margin-top: 0.15rem;
+        }
         .helper-list {
           margin-top: 0.5rem;
           line-height: 1.7;
@@ -428,27 +1575,8 @@ def init_state() -> None:
         "current_account": None,
         "registered_accounts": [],
         "auth_message": "",
-        "company_profile": {
-            "legalName": "",
-            "businessNumber": "",
-            "contactName": "",
-            "email": "",
-            "phone": "",
-            "city": "",
-            "province": "",
-            "industry": "",
-        },
-        "carrier_profile": {
-            "transportCompany": "",
-            "businessNumber": "",
-            "insuranceNumber": "",
-            "contactName": "",
-            "email": "",
-            "phone": "",
-            "fleetSize": 1,
-            "regions": "",
-            "equipmentTypes": [],
-        },
+        "company_profile": empty_company_profile(),
+        "carrier_profile": empty_carrier_profile(),
         "announcements": [],
         "filters": {
             "pickupCity": "",
@@ -477,11 +1605,14 @@ def init_state() -> None:
         },
         "service_requests": [],
         "notifications": [],
+        "ratings": [],
         "selected_map_announcement_id": "",
         "map_selection_version": 0,
         "ignore_empty_map_selection": False,
         "sync_draft_widgets": False,
         "sync_filter_widgets": False,
+        "sync_company_ai_prompt_widget": False,
+        "sync_carrier_ai_prompt_widget": False,
         "geocode_cache": {},
         "last_geocode_timestamp": 0.0,
     }
@@ -490,6 +1621,18 @@ def init_state() -> None:
         if key not in st.session_state:
             st.session_state[key] = value
 
+    load_persisted_data_into_session()
+    current_account = st.session_state.current_account
+    if current_account:
+        refreshed_account = get_account_by_id(normalize_text(current_account.get("id")))
+        if refreshed_account:
+            st.session_state.current_account = refreshed_account
+        else:
+            st.session_state.current_account = None
+            st.session_state.active_role = None
+            st.session_state.auth_view = "landing"
+            st.session_state.pending_role = ""
+            clear_profile_session_state()
     ensure_state_shape()
     sync_widget_keys_from_state()
 
@@ -498,10 +1641,6 @@ def ensure_state_shape() -> None:
     carrier_profile = st.session_state.carrier_profile
     if "insuranceNumber" not in carrier_profile:
         carrier_profile["insuranceNumber"] = ""
-
-    for account in st.session_state.registered_accounts:
-        if account.get("role") == "carrier" and "insuranceNumber" not in account:
-            account["insuranceNumber"] = ""
 
     for announcement in st.session_state.announcements:
         if "pickupAddress" not in announcement:
@@ -598,6 +1737,14 @@ def apply_pending_widget_syncs() -> None:
     if st.session_state.get("sync_filter_widgets"):
         apply_filters_to_widgets()
         st.session_state.sync_filter_widgets = False
+
+    if st.session_state.get("sync_company_ai_prompt_widget"):
+        st.session_state.company_ai_prompt = st.session_state.company_ai["requestText"]
+        st.session_state.sync_company_ai_prompt_widget = False
+
+    if st.session_state.get("sync_carrier_ai_prompt_widget"):
+        st.session_state.carrier_ai_prompt = st.session_state.carrier_ai["requestText"]
+        st.session_state.sync_carrier_ai_prompt_widget = False
 
 
 def gemini_is_configured() -> bool:
@@ -730,44 +1877,102 @@ def normalize_email(value: Any) -> str:
     return normalize_text(value).lower()
 
 
+def get_legal_view() -> str:
+    if hasattr(st, "query_params"):
+        try:
+            return normalize_text(st.query_params.get("legal", ""))
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        query_params = st.experimental_get_query_params()
+        value = query_params.get("legal", [""])
+        if isinstance(value, list):
+            return normalize_text(value[0] if value else "")
+        return normalize_text(value)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def find_account_by_email(email: str) -> dict[str, Any] | None:
-    normalized_email = normalize_email(email)
-    return next(
-        (
-            account
-            for account in st.session_state.registered_accounts
-            if normalize_email(account["email"]) == normalized_email
-        ),
-        None,
-    )
+    return get_account_by_email(email)
 
 
-def apply_account_to_profile(account: dict[str, Any]) -> None:
+def clear_profile_session_state() -> None:
+    st.session_state.company_profile = empty_company_profile()
+    st.session_state.carrier_profile = empty_carrier_profile()
+
+    company = st.session_state.company_profile
+    carrier = st.session_state.carrier_profile
+
+    st.session_state.company_legalName = company["legalName"]
+    st.session_state.company_businessNumber = company["businessNumber"]
+    st.session_state.company_contactName = company["contactName"]
+    st.session_state.company_email = company["email"]
+    st.session_state.company_phone = company["phone"]
+    st.session_state.company_city = company["city"]
+    st.session_state.company_province = company["province"]
+    st.session_state.company_industry = company["industry"]
+
+    st.session_state.carrier_transportCompany = carrier["transportCompany"]
+    st.session_state.carrier_businessNumber = carrier["businessNumber"]
+    st.session_state.carrier_insuranceNumber = carrier["insuranceNumber"]
+    st.session_state.carrier_contactName = carrier["contactName"]
+    st.session_state.carrier_email = carrier["email"]
+    st.session_state.carrier_phone = carrier["phone"]
+    st.session_state.carrier_fleetSize = carrier["fleetSize"]
+    st.session_state.carrier_regions = carrier["regions"]
+    st.session_state.carrier_equipmentTypes = carrier["equipmentTypes"]
+
+
+def apply_account_to_profile(account: dict[str, Any], *, sync_widget_state: bool = True) -> None:
     if account["role"] == "company":
-        profile = st.session_state.company_profile
-        profile["legalName"] = profile["legalName"] or account["businessName"]
-        profile["contactName"] = profile["contactName"] or account["contactName"]
-        profile["email"] = profile["email"] or account["email"]
-        profile["phone"] = profile["phone"] or account["phone"]
-        st.session_state.company_legalName = profile["legalName"]
-        st.session_state.company_contactName = profile["contactName"]
-        st.session_state.company_email = profile["email"]
-        st.session_state.company_phone = profile["phone"]
+        profile = {
+            "legalName": normalize_text(account.get("legalName") or account.get("businessName")),
+            "businessNumber": normalize_text(account.get("businessNumber")),
+            "contactName": normalize_text(account.get("contactName")),
+            "email": normalize_text(account.get("email")),
+            "phone": normalize_text(account.get("phone")),
+            "city": normalize_text(account.get("city")),
+            "province": normalize_text(account.get("province")),
+            "industry": normalize_text(account.get("industry")),
+        }
+        st.session_state.company_profile = profile
+        if sync_widget_state:
+            st.session_state.company_legalName = profile["legalName"]
+            st.session_state.company_businessNumber = profile["businessNumber"]
+            st.session_state.company_contactName = profile["contactName"]
+            st.session_state.company_email = profile["email"]
+            st.session_state.company_phone = profile["phone"]
+            st.session_state.company_city = profile["city"]
+            st.session_state.company_province = profile["province"]
+            st.session_state.company_industry = profile["industry"]
         return
 
-    profile = st.session_state.carrier_profile
-    profile["transportCompany"] = profile["transportCompany"] or account["businessName"]
-    profile["businessNumber"] = profile["businessNumber"] or account.get("businessNumber", "")
-    profile["insuranceNumber"] = profile["insuranceNumber"] or account.get("insuranceNumber", "")
-    profile["contactName"] = profile["contactName"] or account["contactName"]
-    profile["email"] = profile["email"] or account["email"]
-    profile["phone"] = profile["phone"] or account["phone"]
-    st.session_state.carrier_transportCompany = profile["transportCompany"]
-    st.session_state.carrier_businessNumber = profile["businessNumber"]
-    st.session_state.carrier_insuranceNumber = profile["insuranceNumber"]
-    st.session_state.carrier_contactName = profile["contactName"]
-    st.session_state.carrier_email = profile["email"]
-    st.session_state.carrier_phone = profile["phone"]
+    profile = {
+        "transportCompany": normalize_text(
+            account.get("transportCompany") or account.get("businessName")
+        ),
+        "businessNumber": normalize_text(account.get("businessNumber")),
+        "insuranceNumber": normalize_text(account.get("insuranceNumber")),
+        "contactName": normalize_text(account.get("contactName")),
+        "email": normalize_text(account.get("email")),
+        "phone": normalize_text(account.get("phone")),
+        "fleetSize": max(1, int(account.get("fleetSize") or 1)),
+        "regions": normalize_text(account.get("regions")),
+        "equipmentTypes": list(account.get("equipmentTypes") or []),
+    }
+    st.session_state.carrier_profile = profile
+    if sync_widget_state:
+        st.session_state.carrier_transportCompany = profile["transportCompany"]
+        st.session_state.carrier_businessNumber = profile["businessNumber"]
+        st.session_state.carrier_insuranceNumber = profile["insuranceNumber"]
+        st.session_state.carrier_contactName = profile["contactName"]
+        st.session_state.carrier_email = profile["email"]
+        st.session_state.carrier_phone = profile["phone"]
+        st.session_state.carrier_fleetSize = profile["fleetSize"]
+        st.session_state.carrier_regions = profile["regions"]
+        st.session_state.carrier_equipmentTypes = profile["equipmentTypes"]
 
 
 def continue_as_role(role: str) -> None:
@@ -793,6 +1998,7 @@ def sign_out() -> None:
     st.session_state.auth_view = "landing"
     st.session_state.pending_role = ""
     st.session_state.auth_message = "Vous êtes déconnecté."
+    clear_profile_session_state()
 
 
 def is_company_profile_complete() -> bool:
@@ -833,7 +2039,15 @@ def get_active_announcements() -> list[dict[str, Any]]:
 
 
 def get_company_announcements() -> list[dict[str, Any]]:
+    current_account = st.session_state.current_account or {}
+    company_account_id = normalize_text(current_account.get("id"))
     company_name = st.session_state.company_profile["legalName"]
+    if company_account_id:
+        return [
+            announcement
+            for announcement in st.session_state.announcements
+            if normalize_text(announcement.get("companyAccountId")) == company_account_id
+        ]
     return [
         announcement
         for announcement in st.session_state.announcements
@@ -850,7 +2064,16 @@ def get_company_active_announcements() -> list[dict[str, Any]]:
 
 
 def get_current_company_notifications() -> list[dict[str, Any]]:
+    current_account = st.session_state.current_account or {}
+    company_account_id = normalize_text(current_account.get("id"))
     company_name = st.session_state.company_profile["legalName"]
+    if company_account_id:
+        return [
+            notification
+            for notification in st.session_state.notifications
+            if notification["recipientRole"] == "company"
+            and notification.get("recipientAccountId") == company_account_id
+        ][::-1]
     return [
         notification
         for notification in st.session_state.notifications
@@ -860,7 +2083,16 @@ def get_current_company_notifications() -> list[dict[str, Any]]:
 
 
 def get_current_carrier_notifications() -> list[dict[str, Any]]:
+    current_account = st.session_state.current_account or {}
+    carrier_account_id = normalize_text(current_account.get("id"))
     carrier_name = st.session_state.carrier_profile["transportCompany"]
+    if carrier_account_id:
+        return [
+            notification
+            for notification in st.session_state.notifications
+            if notification["recipientRole"] == "carrier"
+            and notification.get("recipientAccountId") == carrier_account_id
+        ][::-1]
     return [
         notification
         for notification in st.session_state.notifications
@@ -870,7 +2102,15 @@ def get_current_carrier_notifications() -> list[dict[str, Any]]:
 
 
 def get_company_service_requests() -> list[dict[str, Any]]:
+    current_account = st.session_state.current_account or {}
+    company_account_id = normalize_text(current_account.get("id"))
     company_name = st.session_state.company_profile["legalName"]
+    if company_account_id:
+        return [
+            request
+            for request in st.session_state.service_requests
+            if normalize_text(request.get("companyAccountId")) == company_account_id
+        ][::-1]
     return [
         request
         for request in st.session_state.service_requests
@@ -879,7 +2119,15 @@ def get_company_service_requests() -> list[dict[str, Any]]:
 
 
 def get_carrier_service_requests() -> list[dict[str, Any]]:
+    current_account = st.session_state.current_account or {}
+    carrier_account_id = normalize_text(current_account.get("id"))
     carrier_name = st.session_state.carrier_profile["transportCompany"]
+    if carrier_account_id:
+        return [
+            request
+            for request in st.session_state.service_requests
+            if normalize_text(request.get("carrierAccountId")) == carrier_account_id
+        ][::-1]
     return [
         request
         for request in st.session_state.service_requests
@@ -892,25 +2140,50 @@ def add_notification(
     recipient_name: str,
     title: str,
     message: str,
+    recipient_account_id: str = "",
     related_announcement_id: str = "",
     related_request_id: str = "",
+    related_alert_id: str = "",
 ) -> None:
-    st.session_state.notifications.append(
-        {
-            "id": f"notif-{datetime.now().timestamp()}",
-            "recipientRole": recipient_role,
-            "recipientName": recipient_name,
-            "title": title,
-            "message": message,
-            "relatedAnnouncementId": related_announcement_id,
-            "relatedRequestId": related_request_id,
-            "createdAt": datetime.now().isoformat(timespec="seconds"),
-        }
-    )
+    notification = {
+        "id": f"notif-{datetime.now().timestamp()}-{secrets.token_hex(3)}",
+        "recipientRole": normalize_text(recipient_role),
+        "recipientName": normalize_text(recipient_name),
+        "recipientAccountId": normalize_text(recipient_account_id),
+        "title": normalize_text(title),
+        "message": normalize_text(message),
+        "relatedAnnouncementId": normalize_text(related_announcement_id),
+        "relatedRequestId": normalize_text(related_request_id),
+        "relatedAlertId": normalize_text(related_alert_id),
+        "createdAt": datetime.now().isoformat(timespec="seconds"),
+    }
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO notifications (
+                id, recipient_role, recipient_name, recipient_account_id, title, message,
+                related_announcement_id, related_request_id, related_alert_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notification["id"],
+                notification["recipientRole"],
+                notification["recipientName"],
+                notification["recipientAccountId"],
+                notification["title"],
+                notification["message"],
+                notification["relatedAnnouncementId"],
+                notification["relatedRequestId"],
+                notification["relatedAlertId"],
+                notification["createdAt"],
+            ),
+        )
+    st.session_state.notifications.append(notification)
 
 
 def expire_outdated_announcements() -> None:
     today = datetime.now().date()
+    has_changes = False
 
     for announcement in st.session_state.announcements:
         if is_announcement_expired(announcement):
@@ -922,10 +2195,12 @@ def expire_outdated_announcements() -> None:
         if not delivery_date or delivery_date >= today:
             continue
 
-        announcement["expiredAt"] = datetime.now().isoformat(timespec="seconds")
+        expired_at = datetime.now().isoformat(timespec="seconds")
+        update_announcement_record(announcement["id"], expiredAt=expired_at)
         add_notification(
             recipient_role="company",
             recipient_name=announcement["companyName"],
+            recipient_account_id=announcement.get("companyAccountId", ""),
             title="Annonce retirée automatiquement",
             message=(
                 f"L'annonce \"{announcement['title']}\" a été retirée automatiquement "
@@ -933,6 +2208,10 @@ def expire_outdated_announcements() -> None:
             ),
             related_announcement_id=announcement["id"],
         )
+        has_changes = True
+
+    if has_changes:
+        load_persisted_data_into_session()
 
 
 def create_service_request(
@@ -948,13 +2227,20 @@ def create_service_request(
         return False, "Cette annonce n'est plus active."
 
     carrier = st.session_state.carrier_profile
+    current_account = st.session_state.current_account or {}
     if not is_carrier_profile_complete():
         return False, "Le profil transporteur doit etre complet."
 
     for request in st.session_state.service_requests:
         if (
             request["announcementId"] == announcement_id
-            and request["carrierName"] == carrier["transportCompany"]
+            and (
+                (
+                    normalize_text(request.get("carrierAccountId"))
+                    and normalize_text(request.get("carrierAccountId")) == normalize_text(current_account.get("id"))
+                )
+                or request["carrierName"] == carrier["transportCompany"]
+            )
             and request["status"] == "pending"
         ):
             return False, "Une proposition en attente existe deja pour cette annonce."
@@ -964,7 +2250,9 @@ def create_service_request(
         "id": request_id,
         "announcementId": announcement_id,
         "announcementTitle": announcement["title"],
+        "companyAccountId": announcement.get("companyAccountId", ""),
         "companyName": announcement["companyName"],
+        "carrierAccountId": normalize_text(current_account.get("id")),
         "carrierName": carrier["transportCompany"],
         "carrierBusinessNumber": carrier["businessNumber"],
         "carrierInsuranceNumber": carrier["insuranceNumber"],
@@ -980,10 +2268,11 @@ def create_service_request(
         "createdAt": datetime.now().isoformat(timespec="seconds"),
         "updatedAt": datetime.now().isoformat(timespec="seconds"),
     }
-    st.session_state.service_requests.append(service_request)
+    create_service_request_record(service_request)
     add_notification(
         recipient_role="company",
         recipient_name=announcement["companyName"],
+        recipient_account_id=announcement.get("companyAccountId", ""),
         title="Nouvelle proposition de transporteur",
         message=(
             f"{carrier['transportCompany']} propose son service pour "
@@ -992,6 +2281,7 @@ def create_service_request(
         related_announcement_id=announcement_id,
         related_request_id=request_id,
     )
+    load_persisted_data_into_session()
     return True, "Votre proposition a ete envoyee a l'entreprise."
 
 
@@ -1025,13 +2315,19 @@ def process_service_request_decision(
         requested_trips = int(service_request["requestedTrips"])
         if int(announcement["remainingTrips"]) < requested_trips:
             return False, "Il ne reste pas assez de voyages disponibles."
-        announcement["remainingTrips"] = int(announcement["remainingTrips"]) - requested_trips
-        service_request["status"] = "accepted"
-        service_request["decisionMessage"] = normalize_text(decision_message) or "Proposition acceptee."
-        service_request["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+        update_announcement_record(
+            announcement["id"],
+            remainingTrips=max(0, int(announcement["remainingTrips"]) - requested_trips),
+        )
+        update_service_request_record(
+            request_id,
+            status="accepted",
+            decisionMessage=normalize_text(decision_message) or "Proposition acceptee.",
+        )
         add_notification(
             recipient_role="carrier",
             recipient_name=service_request["carrierName"],
+            recipient_account_id=service_request.get("carrierAccountId", ""),
             title="Proposition acceptee",
             message=(
                 f"{announcement['companyName']} a accepte votre proposition pour "
@@ -1040,14 +2336,18 @@ def process_service_request_decision(
             related_announcement_id=announcement["id"],
             related_request_id=request_id,
         )
+        load_persisted_data_into_session()
         return True, "Le transporteur a ete accepte."
 
-    service_request["status"] = "refused"
-    service_request["decisionMessage"] = normalize_text(decision_message) or "Proposition refusee."
-    service_request["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+    update_service_request_record(
+        request_id,
+        status="refused",
+        decisionMessage=normalize_text(decision_message) or "Proposition refusee.",
+    )
     add_notification(
         recipient_role="carrier",
         recipient_name=service_request["carrierName"],
+        recipient_account_id=service_request.get("carrierAccountId", ""),
         title="Proposition refusee",
         message=(
             f"{announcement['companyName']} a refuse votre proposition pour "
@@ -1056,6 +2356,7 @@ def process_service_request_decision(
         related_announcement_id=announcement["id"],
         related_request_id=request_id,
     )
+    load_persisted_data_into_session()
     return True, "Le transporteur a ete refuse."
 
 
@@ -1336,6 +2637,249 @@ def clamp_score(value: Any) -> int:
         return 0
 
 
+def clamp_rating_score(value: Any) -> int:
+    try:
+        return max(1, min(5, int(float(value))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def get_display_star_count(score: Any, *, max_stars: int = 5) -> int:
+    try:
+        return max(0, min(max_stars, int(float(score) + 0.5)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_star_text(score: Any, *, max_stars: int = 5) -> str:
+    rating = get_display_star_count(score, max_stars=max_stars)
+    return f"{chr(9733) * rating}{chr(9734) * max(0, max_stars - rating)}"
+
+
+def build_star_html(score: Any, *, max_stars: int = 5) -> str:
+    rating = get_display_star_count(score, max_stars=max_stars)
+    filled = "&#9733;" * rating
+    empty = "&#9734;" * max(0, max_stars - rating)
+    return f"<span class='rating-stars'>{filled}<span class='rating-stars-off'>{empty}</span></span>"
+
+
+def get_ratings_for_account(account_id: str) -> list[dict[str, Any]]:
+    normalized_account_id = normalize_text(account_id)
+    if not normalized_account_id:
+        return []
+    ratings = [
+        rating
+        for rating in st.session_state.ratings
+        if normalize_text(rating.get("revieweeAccountId")) == normalized_account_id
+    ]
+    return sorted(ratings, key=lambda item: item.get("createdAt", ""), reverse=True)
+
+
+def get_public_rating_summary(account_id: str) -> dict[str, Any]:
+    ratings = get_ratings_for_account(account_id)
+    if not ratings:
+        return {
+            "average": 0.0,
+            "count": 0,
+            "starsText": build_star_text(0),
+            "label": "Aucune evaluation publique",
+        }
+
+    average = round(sum(int(item["score"]) for item in ratings) / len(ratings), 1)
+    rounded_stars = get_display_star_count(average)
+    return {
+        "average": average,
+        "count": len(ratings),
+        "starsText": build_star_text(rounded_stars),
+        "label": f"{average:.1f}/5 ({len(ratings)} evaluation(s))",
+    }
+
+
+def find_existing_rating(
+    request_id: str,
+    reviewer_account_id: str,
+    reviewee_account_id: str,
+) -> dict[str, Any] | None:
+    normalized_request_id = normalize_text(request_id)
+    normalized_reviewer_id = normalize_text(reviewer_account_id)
+    normalized_reviewee_id = normalize_text(reviewee_account_id)
+    for rating in st.session_state.ratings:
+        if (
+            normalize_text(rating.get("requestId")) == normalized_request_id
+            and normalize_text(rating.get("reviewerAccountId")) == normalized_reviewer_id
+            and normalize_text(rating.get("revieweeAccountId")) == normalized_reviewee_id
+        ):
+            return rating
+    return None
+
+
+def render_public_rating_summary(account_id: str, *, empty_message: str) -> None:
+    summary = get_public_rating_summary(account_id)
+    if not summary["count"]:
+        st.caption(empty_message)
+        return
+
+        st.markdown(
+        (
+            "<div class='rating-summary'>"
+            f"{build_star_html(summary['average'])}"
+            f"<strong>{summary['average']:.1f}/5</strong>"
+            f"<span>{summary['count']} evaluation(s) publique(s)</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def render_public_reviews(account_id: str, *, empty_message: str, limit: int = 5) -> None:
+    ratings = get_ratings_for_account(account_id)
+    if not ratings:
+        st.caption(empty_message)
+        return
+
+    for rating in ratings[:limit]:
+        reviewer_label = "Entreprise" if rating["reviewerRole"] == "company" else "Transporteur"
+        comment = html.escape(rating["comment"] or "Sans commentaire.")
+        reviewer_name = html.escape(rating["reviewerName"] or reviewer_label)
+        st.markdown(
+            f"""
+            <div class="review-card">
+              <div>{build_star_html(rating['score'])} <strong>{rating['score']}/5</strong></div>
+              <div class="review-meta">{reviewer_label} - {reviewer_name} - {html.escape(rating['createdAt'])}</div>
+              <div class="small-copy">{comment}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def submit_public_rating(
+    service_request: dict[str, Any],
+    *,
+    reviewer_role: str,
+    score: Any,
+    comment: str,
+) -> tuple[bool, str]:
+    if normalize_text(service_request.get("status")) not in RATABLE_REQUEST_STATUSES:
+        return False, "Cette evaluation sera disponible seulement apres une collaboration acceptee."
+
+    current_account = st.session_state.current_account or {}
+    reviewer_account_id = normalize_text(current_account.get("id"))
+    if not reviewer_account_id:
+        return False, "Reconnectez-vous pour publier une evaluation."
+
+    if reviewer_role == "company":
+        reviewer_name = st.session_state.company_profile["legalName"]
+        reviewee_role = "carrier"
+        reviewee_account_id = normalize_text(service_request.get("carrierAccountId"))
+        reviewee_name = service_request["carrierName"]
+    else:
+        reviewer_name = st.session_state.carrier_profile["transportCompany"]
+        reviewee_role = "company"
+        reviewee_account_id = normalize_text(service_request.get("companyAccountId"))
+        reviewee_name = service_request["companyName"]
+
+    if not reviewee_account_id:
+        return False, "Le compte cible doit etre relie a l'annonce pour pouvoir etre evalue."
+
+    if find_existing_rating(service_request["id"], reviewer_account_id, reviewee_account_id):
+        return False, "Vous avez deja publie une evaluation pour cette collaboration."
+
+    try:
+        create_rating_record(
+            {
+                "requestId": service_request["id"],
+                "announcementId": service_request.get("announcementId", ""),
+                "reviewerAccountId": reviewer_account_id,
+                "reviewerRole": reviewer_role,
+                "reviewerName": reviewer_name,
+                "revieweeAccountId": reviewee_account_id,
+                "revieweeRole": reviewee_role,
+                "revieweeName": reviewee_name,
+                "score": clamp_rating_score(score),
+                "comment": normalize_text(comment),
+            }
+        )
+    except sqlite3.IntegrityError:
+        return False, "Une evaluation existe deja pour cette collaboration."
+
+    add_notification(
+        recipient_role=reviewee_role,
+        recipient_name=reviewee_name,
+        recipient_account_id=reviewee_account_id,
+        title="Nouvelle evaluation publique",
+        message=(
+            f"{reviewer_name} a publie une evaluation de {clamp_rating_score(score)}/5 "
+            f"apres la collaboration sur {service_request['announcementTitle']}."
+        ),
+        related_announcement_id=service_request.get("announcementId", ""),
+        related_request_id=service_request["id"],
+    )
+    load_persisted_data_into_session()
+    return True, "Votre evaluation publique a ete enregistree."
+
+
+def render_rating_form_for_request(
+    service_request: dict[str, Any],
+    *,
+    reviewer_role: str,
+) -> None:
+    if normalize_text(service_request.get("status")) not in RATABLE_REQUEST_STATUSES:
+        return
+
+    reviewee_role = "transporteur" if reviewer_role == "company" else "entreprise"
+    reviewee_account_id = normalize_text(
+        service_request.get("carrierAccountId" if reviewer_role == "company" else "companyAccountId")
+    )
+    reviewer_account_id = normalize_text((st.session_state.current_account or {}).get("id"))
+    existing_rating = find_existing_rating(
+        service_request["id"],
+        reviewer_account_id,
+        reviewee_account_id,
+    )
+
+    if existing_rating:
+        show_notice(
+            "success",
+            "Evaluation deja publiee",
+            (
+                f"Votre note pour ce {reviewee_role} est de {existing_rating['score']}/5. "
+                f"Commentaire: {existing_rating['comment'] or 'Sans commentaire.'}"
+            ),
+        )
+        return
+
+    with st.form(f"rating-form-{reviewer_role}-{service_request['id']}"):
+        score = st.select_slider(
+            "Note de 1 a 5 etoiles",
+            options=[1, 2, 3, 4, 5],
+            value=5,
+            format_func=lambda value: f"{value}/5 - {build_star_text(value)}",
+        )
+        comment = st.text_area(
+            "Commentaire public (optionnel)",
+            key=f"rating-comment-{reviewer_role}-{service_request['id']}",
+            height=90,
+            placeholder="Partagez votre experience de collaboration si vous le souhaitez.",
+        )
+        submit_rating = st.form_submit_button(
+            f"Publier mon evaluation du {reviewee_role}",
+            use_container_width=True,
+        )
+
+    if submit_rating:
+        ok, message = submit_public_rating(
+            service_request,
+            reviewer_role=reviewer_role,
+            score=score,
+            comment=comment,
+        )
+        if ok:
+            st.success(message)
+            st.rerun()
+        st.error(message)
+
+
 def calculate_local_compatibility(
     profile: dict[str, Any], announcement: dict[str, Any]
 ) -> int:
@@ -1358,24 +2902,198 @@ def get_filtered_announcements() -> list[dict[str, Any]]:
     filters = st.session_state.filters
     results = []
     for announcement in get_active_announcements():
-        if filters["pickupCity"] and normalize_for_match(filters["pickupCity"]) not in normalize_for_match(
-            announcement["pickupCity"]
-        ):
-            continue
-        if filters["deliveryCity"] and normalize_for_match(filters["deliveryCity"]) not in normalize_for_match(
-            announcement["deliveryCity"]
-        ):
-            continue
-        if filters["cargoType"] and normalize_for_match(filters["cargoType"]) not in normalize_for_match(
-            announcement["cargoType"]
-        ):
-            continue
-        if filters["equipment"] and normalize_equipment_for_match(filters["equipment"]) != normalize_equipment_for_match(
-            announcement["equipment"]
+        if not announcement_matches_filter_values(
+            announcement,
+            pickup_city=filters["pickupCity"],
+            delivery_city=filters["deliveryCity"],
+            cargo_type=filters["cargoType"],
+            equipment=filters["equipment"],
         ):
             continue
         results.append(announcement)
     return results
+
+
+def announcement_matches_filter_values(
+    announcement: dict[str, Any],
+    *,
+    pickup_city: str = "",
+    delivery_city: str = "",
+    cargo_type: str = "",
+    equipment: str = "",
+) -> bool:
+    if pickup_city and normalize_for_match(pickup_city) not in normalize_for_match(
+        announcement["pickupCity"]
+    ):
+        return False
+    if delivery_city and normalize_for_match(delivery_city) not in normalize_for_match(
+        announcement["deliveryCity"]
+    ):
+        return False
+    if cargo_type and normalize_for_match(cargo_type) not in normalize_for_match(
+        announcement["cargoType"]
+    ):
+        return False
+    if equipment and normalize_equipment_for_match(equipment) != normalize_equipment_for_match(
+        announcement["equipment"]
+    ):
+        return False
+    return True
+
+
+def alert_matches_announcement(alert: dict[str, Any], announcement: dict[str, Any]) -> bool:
+    return announcement_matches_filter_values(
+        announcement,
+        pickup_city=alert.get("pickupCity", ""),
+        delivery_city=alert.get("deliveryCity", ""),
+        cargo_type=alert.get("cargoType", ""),
+        equipment=alert.get("equipment", ""),
+    )
+
+
+def notify_matching_carrier_alerts(announcement: dict[str, Any]) -> int:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM carrier_alerts WHERE is_active = 1 ORDER BY created_at ASC"
+        ).fetchall()
+    alerts = [item for item in (serialize_alert_row(row) for row in rows) if item]
+    notifications_sent = 0
+
+    for alert in alerts:
+        if not alert_matches_announcement(alert, announcement):
+            continue
+        if notification_exists(
+            recipient_account_id=alert["carrierAccountId"],
+            related_announcement_id=announcement["id"],
+            related_alert_id=alert["id"],
+        ):
+            continue
+        add_notification(
+            recipient_role="carrier",
+            recipient_name=alert["carrierName"],
+            recipient_account_id=alert["carrierAccountId"],
+            title="Nouvelle annonce correspondant a votre alerte",
+            message=(
+                f"{announcement['companyName']} a publie {announcement['title']} "
+                f"({announcement['pickupCity']} -> {announcement['deliveryCity']})."
+            ),
+            related_announcement_id=announcement["id"],
+            related_alert_id=alert["id"],
+        )
+        notifications_sent += 1
+
+    return notifications_sent
+
+
+def send_request_message(request_id: str, body: str) -> tuple[bool, str]:
+    cleaned_body = normalize_text(body)
+    if not cleaned_body:
+        return False, "Ecrivez un message avant de l'envoyer."
+
+    service_request = next(
+        (item for item in st.session_state.service_requests if item["id"] == request_id),
+        None,
+    )
+    if not service_request:
+        return False, "Conversation introuvable."
+
+    current_account = st.session_state.current_account or {}
+    sender_role = normalize_text(current_account.get("role")) or st.session_state.active_role or ""
+    sender_name = (
+        st.session_state.company_profile["legalName"]
+        if sender_role == "company"
+        else st.session_state.carrier_profile["transportCompany"]
+    )
+    sender_account_id = normalize_text(current_account.get("id"))
+
+    create_message_record(
+        request_id,
+        sender_role=sender_role,
+        sender_name=sender_name,
+        sender_account_id=sender_account_id,
+        body=cleaned_body,
+    )
+
+    if sender_role == "company":
+        add_notification(
+            recipient_role="carrier",
+            recipient_name=service_request["carrierName"],
+            recipient_account_id=service_request.get("carrierAccountId", ""),
+            title="Nouveau message de l'entreprise",
+            message=f"Nouveau message concernant {service_request['announcementTitle']}.",
+            related_announcement_id=service_request["announcementId"],
+            related_request_id=request_id,
+        )
+    else:
+        add_notification(
+            recipient_role="company",
+            recipient_name=service_request["companyName"],
+            recipient_account_id=service_request.get("companyAccountId", ""),
+            title="Nouveau message du transporteur",
+            message=f"Nouveau message concernant {service_request['announcementTitle']}.",
+            related_announcement_id=service_request["announcementId"],
+            related_request_id=request_id,
+        )
+
+    load_persisted_data_into_session()
+    return True, "Message envoye."
+
+
+def render_documents_for_owner(owner_type: str, owner_id: str, *, empty_message: str) -> None:
+    documents = list_documents(owner_type, owner_id)
+    if not documents:
+        st.caption(empty_message)
+        return
+
+    for document in documents:
+        document_path = Path(document["filePath"])
+        if not document_path.exists():
+            st.caption(f"{document['fileName']} (fichier introuvable)")
+            continue
+        st.download_button(
+            label=f"Telecharger {document['fileName']}",
+            data=document_path.read_bytes(),
+            file_name=document["fileName"],
+            mime=document["contentType"] or "application/octet-stream",
+            key=f"download-{document['id']}",
+            use_container_width=True,
+        )
+
+
+def render_request_messages(service_request: dict[str, Any]) -> None:
+    messages = list_messages_for_request(service_request["id"])
+    if not messages:
+        st.caption("Aucun message pour le moment.")
+    else:
+        for item in messages:
+            role_label = "Entreprise" if item["senderRole"] == "company" else "Transporteur"
+            st.markdown(
+                f"""
+                <div class="result-card">
+                  <div class="small-copy">
+                    <strong>{role_label}</strong> - {item['senderName']}<br>
+                    {item['body']}<br>
+                    <span style="color:#7e97b8;">{item['createdAt']}</span>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    with st.form(f"message-form-{service_request['id']}"):
+        body = st.text_area(
+            "Envoyer un message",
+            key=f"message-body-{service_request['id']}",
+            height=80,
+            placeholder="Ecrivez ici un message pour l'autre partie.",
+        )
+        submit_message = st.form_submit_button("Envoyer le message", use_container_width=True)
+    if submit_message:
+        ok, message = send_request_message(service_request["id"], body)
+        if ok:
+            st.success(message)
+            st.rerun()
+        st.error(message)
 
 
 def ranked_carrier_results() -> list[dict[str, Any]]:
@@ -1530,7 +3248,7 @@ def company_assistant() -> None:
 
     if use_example:
         st.session_state.company_ai["requestText"] = COMPANY_EXAMPLE_PROMPT
-        st.session_state.company_ai_prompt = COMPANY_EXAMPLE_PROMPT
+        st.session_state.sync_company_ai_prompt_widget = True
         st.rerun()
 
     if generate:
@@ -1681,7 +3399,7 @@ def carrier_assistant() -> None:
 
     if use_example:
         st.session_state.carrier_ai["requestText"] = CARRIER_EXAMPLE_PROMPT
-        st.session_state.carrier_ai_prompt = CARRIER_EXAMPLE_PROMPT
+        st.session_state.sync_carrier_ai_prompt_widget = True
         st.rerun()
 
     if analyze:
@@ -1906,6 +3624,9 @@ def render_company_requests_panel() -> None:
         announcement = find_announcement(service_request["announcementId"])
         remaining_trips = announcement["remainingTrips"] if announcement else 0
         status_class = "status-pill" if service_request["status"] == "pending" else "status-pill ai"
+        carrier_rating_summary = get_public_rating_summary(
+            service_request.get("carrierAccountId", "")
+        )
         st.markdown(
             f"""
             <div class="result-card">
@@ -1914,6 +3635,7 @@ def render_company_requests_panel() -> None:
                   <div class="section-title" style="font-size:1.1rem;margin-top:0;">{service_request['announcementTitle']}</div>
                   <div class="small-copy">
                     Transporteur: <strong>{service_request['carrierName']}</strong><br>
+                    Note publique: <strong>{carrier_rating_summary['label']}</strong><br>
                     Contact: {service_request['carrierContactName']} | {service_request['carrierPhone']}<br>
                     Voyages demandes: <strong>{service_request['requestedTrips']}</strong><br>
                     Voyages restants dans l'annonce: <strong>{remaining_trips}</strong><br>
@@ -1948,11 +3670,31 @@ def render_company_requests_panel() -> None:
                 st.caption("Courriel")
                 st.write(service_request.get("carrierEmail") or "Non renseigne")
 
+            st.caption("Evaluation publique moyenne")
+            render_public_rating_summary(
+                service_request.get("carrierAccountId", ""),
+                empty_message="Aucune evaluation publique pour ce transporteur pour le moment.",
+            )
             st.caption("Equipements")
             st.markdown(
                 equipment_html or "<div class='small-copy'>Non renseigne</div>",
                 unsafe_allow_html=True,
             )
+            st.caption("Documents facultatifs")
+            render_documents_for_owner(
+                "carrier_profile",
+                service_request.get("carrierAccountId", ""),
+                empty_message="Aucun document de profil ajoute.",
+            )
+            st.caption("Commentaires publics recents")
+            render_public_reviews(
+                service_request.get("carrierAccountId", ""),
+                empty_message="Aucun commentaire public pour ce transporteur.",
+                limit=3,
+            )
+
+        with st.expander(f"Messagerie - {service_request['carrierName']}", expanded=False):
+            render_request_messages(service_request)
 
         if service_request["status"] == "pending":
             with st.form(f"decision-form-{service_request['id']}"):
@@ -1992,6 +3734,15 @@ def render_company_requests_panel() -> None:
                 "Decision deja prise",
                 service_request["decisionMessage"] or "La demande a deja ete traitee.",
             )
+            if normalize_text(service_request["status"]) in RATABLE_REQUEST_STATUSES:
+                with st.expander(
+                    f"Evaluer ce transporteur - {service_request['carrierName']}",
+                    expanded=False,
+                ):
+                    render_rating_form_for_request(
+                        service_request,
+                        reviewer_role="company",
+                    )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2013,6 +3764,9 @@ def render_carrier_requests_panel() -> None:
 
     for service_request in requests_list:
         status_class = "status-pill" if service_request["status"] == "pending" else "status-pill ai"
+        company_rating_summary = get_public_rating_summary(
+            service_request.get("companyAccountId", "")
+        )
         st.markdown(
             f"""
             <div class="result-card">
@@ -2021,6 +3775,7 @@ def render_carrier_requests_panel() -> None:
                   <div class="section-title" style="font-size:1.1rem;margin-top:0;">{service_request['announcementTitle']}</div>
                   <div class="small-copy">
                     Entreprise: <strong>{service_request['companyName']}</strong><br>
+                    Note publique: <strong>{company_rating_summary['label']}</strong><br>
                     Voyages demandes: <strong>{service_request['requestedTrips']}</strong><br>
                     Message envoye: {service_request['message'] or 'Aucun message.'}<br>
                     Reponse: {service_request['decisionMessage'] or 'En attente de decision.'}
@@ -2032,6 +3787,143 @@ def render_carrier_requests_panel() -> None:
             """,
             unsafe_allow_html=True,
         )
+
+        with st.expander(f"Voir les evaluations publiques de {service_request['companyName']}", expanded=False):
+            render_public_rating_summary(
+                service_request.get("companyAccountId", ""),
+                empty_message="Aucune evaluation publique pour cette entreprise pour le moment.",
+            )
+            render_public_reviews(
+                service_request.get("companyAccountId", ""),
+                empty_message="Aucun commentaire public pour cette entreprise.",
+                limit=3,
+            )
+
+        with st.expander(f"Messagerie - {service_request['companyName']}", expanded=False):
+            render_request_messages(service_request)
+
+        if normalize_text(service_request["status"]) in RATABLE_REQUEST_STATUSES:
+            with st.expander(
+                f"Evaluer cette entreprise - {service_request['companyName']}",
+                expanded=False,
+            ):
+                render_rating_form_for_request(
+                    service_request,
+                    reviewer_role="carrier",
+                )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_alerts_panel() -> None:
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Alertes</span>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Mes alertes transporteur</div>", unsafe_allow_html=True)
+
+    current_account = st.session_state.current_account or {}
+    carrier_account_id = normalize_text(current_account.get("id"))
+    if not carrier_account_id:
+        show_notice("info", "Connexion requise", "Connectez-vous pour enregistrer des alertes.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    with st.form("carrier_alert_form"):
+        title = st.text_input(
+            "Nom de l'alerte",
+            placeholder="Exemple: Flatbed Quebec -> Maine",
+        )
+        alert_cols = st.columns(2)
+        with alert_cols[0]:
+            pickup_city = st.text_input(
+                "Chargement contient",
+                value=st.session_state.filters["pickupCity"],
+            )
+            cargo_type = st.selectbox(
+                "Marchandise",
+                options=[""] + get_cargo_filter_options(),
+                format_func=lambda value: "Toutes" if not value else value,
+            )
+        with alert_cols[1]:
+            delivery_city = st.text_input(
+                "Livraison contient",
+                value=st.session_state.filters["deliveryCity"],
+            )
+            equipment = st.selectbox(
+                "Equipement requis",
+                options=[""] + EQUIPMENT_OPTIONS,
+                format_func=lambda value: "Tous" if not value else value,
+            )
+        submit_alert = st.form_submit_button("Creer l'alerte", use_container_width=True)
+
+    if submit_alert:
+        if not any(
+            normalize_text(value)
+            for value in [title, pickup_city, delivery_city, cargo_type, equipment]
+        ):
+            show_notice(
+                "warning",
+                "Critere manquant",
+                "Ajoutez au moins un critere pour creer une alerte utile.",
+            )
+        else:
+            alert = create_carrier_alert_record(
+                {
+                    "carrierAccountId": carrier_account_id,
+                    "carrierName": st.session_state.carrier_profile["transportCompany"],
+                    "title": normalize_text(title) or "Alerte transporteur",
+                    "pickupCity": normalize_text(pickup_city),
+                    "deliveryCity": normalize_text(delivery_city),
+                    "cargoType": normalize_text(cargo_type),
+                    "equipment": normalize_text(equipment),
+                    "isActive": True,
+                }
+            )
+            current_matches = sum(
+                1 for announcement in get_active_announcements() if alert_matches_announcement(alert, announcement)
+            )
+            show_notice(
+                "success",
+                "Alerte enregistree",
+                f"Votre alerte est active. {current_matches} annonce(s) active(s) correspondent deja a ces criteres.",
+            )
+
+    alerts = list_carrier_alerts(carrier_account_id)
+    if not alerts:
+        show_notice(
+            "info",
+            "Aucune alerte enregistree",
+            "Créez une alerte pour etre averti quand une nouvelle annonce correspond a votre equipement ou a vos regions.",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    for alert in alerts:
+        matches_count = sum(
+            1 for announcement in get_active_announcements() if alert_matches_announcement(alert, announcement)
+        )
+        label_parts = [
+            alert["pickupCity"] or "Tous chargements",
+            alert["deliveryCity"] or "Toutes livraisons",
+            alert["cargoType"] or "Toute marchandise",
+            alert["equipment"] or "Tout equipement",
+        ]
+        st.markdown(
+            f"""
+            <div class="result-card">
+              <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;">
+                <div>
+                  <div class="section-title" style="font-size:1.05rem;margin-top:0;">{alert['title']}</div>
+                  <div class="small-copy">{' • '.join(label_parts)}<br>{matches_count} annonce(s) active(s) correspond(ent) actuellement.</div>
+                </div>
+                <div class="status-pill">Active</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Supprimer cette alerte", key=f"delete-alert-{alert['id']}", use_container_width=True):
+            delete_carrier_alert_record(alert["id"])
+            st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2073,6 +3965,7 @@ def render_top_bar() -> None:
             sign_out()
             st.rerun()
         if st.button("Réinitialiser la démo", use_container_width=True):
+            reset_demo_data()
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -2095,6 +3988,75 @@ def render_landing_contact() -> None:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def render_privacy_footer() -> None:
+    st.markdown(
+        """
+        <div class="policy-footer">
+          En utilisant LoadSearch, vous acceptez que les renseignements nécessaires à la gestion
+          de votre compte, de votre profil et des mises en relation soient utilisés de façon
+          confidentielle dans le cadre du service.
+          <br>
+          <a class="policy-link" href="?legal=privacy" target="_self">Lire la politique de confidentialité</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_privacy_policy_page() -> None:
+    st.markdown(
+        """
+        <div class="landing-shell">
+          <div class="landing-hero" style="text-align:left;">
+            <span class="eyebrow">Confidentialité</span>
+            <div class="section-title" style="font-size:2.3rem;margin-top:1rem;">Politique de confidentialité</div>
+            <p class="landing-description" style="max-width:none;margin:0;color:#c3d2e7;">
+              Cette page présente une version sommaire de la politique de confidentialité de LoadSearch
+              pour l'utilisation actuelle de l'application.
+            </p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="margin:1rem 0 1.4rem;"><a class="policy-link" href="?" target="_self">Retour à l’application</a></div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("**Renseignements recueillis**")
+    st.markdown(
+        "LoadSearch peut recueillir les renseignements nécessaires à la création et à la gestion des comptes, "
+        "des profils, des annonces et des mises en relation. Cela peut inclure le nom, le courriel, le numéro "
+        "de téléphone, le numéro d’entreprise et, pour les transporteurs, le numéro de contrat ou de certificat d’assurance."
+    )
+
+    st.markdown("**Utilisation des renseignements**")
+    st.markdown(
+        "Ces renseignements servent à authentifier les utilisateurs, afficher les profils pertinents, faciliter "
+        "les propositions de transport et communiquer avec les parties concernées dans le cadre du service."
+    )
+
+    st.markdown("**Protection et accès**")
+    st.markdown(
+        "LoadSearch applique des mesures raisonnables pour limiter l’accès aux renseignements et en protéger la "
+        "confidentialité. Vous pouvez demander l’accès ou la correction de vos renseignements en écrivant à "
+        "`willgagne30@gmail.com`."
+    )
+
+    st.markdown("**Conservation**")
+    st.markdown(
+        "Les renseignements sont conservés aussi longtemps que nécessaire au fonctionnement du service ou au respect "
+        "des obligations applicables."
+    )
+
+    st.markdown("**Important**")
+    st.markdown(
+        "Cette version est une politique sommaire adaptée au prototype actuel. Une politique complète devrait être "
+        "validée avant un déploiement public."
     )
 
 
@@ -2171,8 +4133,9 @@ def render_login_panel() -> None:
         submit = st.form_submit_button("Se connecter", type="primary", use_container_width=True)
 
     if submit:
-        account = find_account_by_email(email)
-        if not account or account["password"] != password:
+        user_row = get_user_row_by_email(email)
+        account = serialize_account_row(user_row)
+        if not user_row or not verify_password(password, str(user_row["password_hash"])):
             show_notice("error", "Connexion impossible", "Le courriel ou le mot de passe est incorrect.")
         else:
             st.session_state.current_account = account
@@ -2240,24 +4203,28 @@ def render_signup_panel(role: str) -> None:
         elif find_account_by_email(email):
             show_notice("warning", "Compte déjà existant", "Un compte existe déjà avec ce courriel. Utilisez la connexion.")
         else:
-            account = {
-                "id": f"account-{datetime.now().timestamp()}",
-                "role": role,
-                "businessName": normalize_text(business_name),
-                "contactName": normalize_text(contact_name),
-                "email": normalize_email(email),
-                "phone": normalize_text(phone),
-                "insuranceNumber": normalize_text(insurance_number) if role == "carrier" else "",
-                "password": password,
-                "createdAt": datetime.now().isoformat(timespec="seconds"),
-            }
-            st.session_state.registered_accounts.append(account)
-            st.session_state.current_account = account
-            st.session_state.auth_view = "landing"
-            st.session_state.auth_message = ""
-            apply_account_to_profile(account)
-            st.session_state.active_role = role
-            st.rerun()
+            try:
+                account = create_account_record(
+                    role=role,
+                    business_name=business_name,
+                    contact_name=contact_name,
+                    email=email,
+                    phone=phone,
+                    password=password,
+                    insurance_number=insurance_number,
+                )
+                st.session_state.current_account = account
+                st.session_state.auth_view = "landing"
+                st.session_state.auth_message = ""
+                apply_account_to_profile(account)
+                st.session_state.active_role = role
+                st.rerun()
+            except sqlite3.IntegrityError:
+                show_notice(
+                    "warning",
+                    "Courriel déjà utilisé",
+                    "Cette adresse courriel est déjà utilisée par un autre compte.",
+                )
 
     action_cols = st.columns(2)
     with action_cols[0]:
@@ -2346,16 +4313,27 @@ def render_landing() -> None:
     render_landing_contact()
 
 
-def render_company_profile() -> None:
+def render_company_profile(*, edit_mode: bool = False) -> None:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
-    st.markdown("<span class='eyebrow'>Etape 1</span>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Completer votre profil entreprise</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<p class='small-copy'>Tant que ce profil n'est pas rempli, vous ne pouvez pas publier d'annonce.</p>",
-        unsafe_allow_html=True,
-    )
+    if edit_mode:
+        st.markdown("<span class='eyebrow'>Profil</span>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Modifier votre profil entreprise</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<p class='small-copy'>Mettez a jour vos informations d'entreprise et vos documents quand necessaire.</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("<span class='eyebrow'>Etape 1</span>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Completer votre profil entreprise</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<p class='small-copy'>Tant que ce profil n'est pas rempli, vous ne pouvez pas publier d'annonce.</p>",
+            unsafe_allow_html=True,
+        )
 
-    with st.form("company_profile_form"):
+    form_key = "company_profile_form_edit" if edit_mode else "company_profile_form"
+    submit_label = "Enregistrer les modifications" if edit_mode else "Enregistrer le profil et continuer"
+
+    with st.form(form_key):
         col1, col2 = st.columns(2)
         with col1:
             st.text_input("Nom legal de l'entreprise", key="company_legalName")
@@ -2371,10 +4349,16 @@ def render_company_profile() -> None:
                 key="company_province",
             )
             st.text_input("Secteur d'activite", key="company_industry")
-        submitted = st.form_submit_button("Enregistrer le profil et continuer", type="primary")
+        company_profile_docs = st.file_uploader(
+            "Documents facultatifs de l'entreprise",
+            accept_multiple_files=True,
+            key="company_profile_docs_edit" if edit_mode else "company_profile_docs",
+            help="Exemple: preuve d'entreprise ou document interne utile.",
+        )
+        submitted = st.form_submit_button(submit_label, type="primary")
 
     if submitted:
-        st.session_state.company_profile = {
+        company_profile = {
             "legalName": st.session_state.company_legalName,
             "businessNumber": st.session_state.company_businessNumber,
             "contactName": st.session_state.company_contactName,
@@ -2384,21 +4368,62 @@ def render_company_profile() -> None:
             "province": st.session_state.company_province,
             "industry": st.session_state.company_industry,
         }
-        st.rerun()
+        if not st.session_state.current_account:
+            show_notice("error", "Session invalide", "Reconnectez-vous pour enregistrer ce profil.")
+        else:
+            try:
+                account = update_company_profile_record(
+                    st.session_state.current_account["id"],
+                    company_profile,
+                )
+                save_uploaded_documents(
+                    company_profile_docs,
+                    owner_type="company_profile",
+                    owner_id=account["id"],
+                    account_id=account["id"],
+                    role="company",
+                    description="Document de profil entreprise",
+                )
+                st.session_state.current_account = account
+                apply_account_to_profile(account, sync_widget_state=False)
+                st.rerun()
+            except sqlite3.IntegrityError:
+                show_notice(
+                    "warning",
+                    "Courriel déjà utilisé",
+                    "Cette adresse courriel est déjà utilisée par un autre compte.",
+                )
 
     st.markdown("</div>", unsafe_allow_html=True)
+    if st.session_state.current_account:
+        render_documents_for_owner(
+            "company_profile",
+            st.session_state.current_account["id"],
+            empty_message="Aucun document de profil entreprise.",
+        )
 
 
-def render_carrier_profile() -> None:
+def render_carrier_profile(*, edit_mode: bool = False) -> None:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
-    st.markdown("<span class='eyebrow'>Etape 1</span>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Completer votre profil transporteur</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<p class='small-copy'>Tant que ce profil n'est pas rempli, vous ne pouvez pas chercher des voyages.</p>",
-        unsafe_allow_html=True,
-    )
+    if edit_mode:
+        st.markdown("<span class='eyebrow'>Profil</span>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Modifier votre profil transporteur</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<p class='small-copy'>Mettez a jour votre flotte, vos equipements et vos documents au besoin.</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("<span class='eyebrow'>Etape 1</span>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Completer votre profil transporteur</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<p class='small-copy'>Tant que ce profil n'est pas rempli, vous ne pouvez pas chercher des voyages.</p>",
+            unsafe_allow_html=True,
+        )
 
-    with st.form("carrier_profile_form"):
+    form_key = "carrier_profile_form_edit" if edit_mode else "carrier_profile_form"
+    submit_label = "Enregistrer les modifications" if edit_mode else "Enregistrer le profil et continuer"
+
+    with st.form(form_key):
         col1, col2 = st.columns(2)
         with col1:
             st.text_input("Nom de la compagnie de transport", key="carrier_transportCompany")
@@ -2414,10 +4439,16 @@ def render_carrier_profile() -> None:
             st.text_input("Courriel", key="carrier_email")
             st.text_input("Regions desservies", key="carrier_regions")
             st.multiselect("Equipements disponibles", EQUIPMENT_OPTIONS, key="carrier_equipmentTypes")
-        submitted = st.form_submit_button("Enregistrer le profil et continuer", type="primary")
+        carrier_profile_docs = st.file_uploader(
+            "Documents facultatifs du transporteur",
+            accept_multiple_files=True,
+            key="carrier_profile_docs_edit" if edit_mode else "carrier_profile_docs",
+            help="Exemple: certificat d'assurance, preuve d'entreprise ou autres justificatifs.",
+        )
+        submitted = st.form_submit_button(submit_label, type="primary")
 
     if submitted:
-        st.session_state.carrier_profile = {
+        carrier_profile = {
             "transportCompany": st.session_state.carrier_transportCompany,
             "businessNumber": st.session_state.carrier_businessNumber,
             "insuranceNumber": st.session_state.carrier_insuranceNumber,
@@ -2428,9 +4459,39 @@ def render_carrier_profile() -> None:
             "regions": st.session_state.carrier_regions,
             "equipmentTypes": st.session_state.carrier_equipmentTypes,
         }
-        st.rerun()
+        if not st.session_state.current_account:
+            show_notice("error", "Session invalide", "Reconnectez-vous pour enregistrer ce profil.")
+        else:
+            try:
+                account = update_carrier_profile_record(
+                    st.session_state.current_account["id"],
+                    carrier_profile,
+                )
+                save_uploaded_documents(
+                    carrier_profile_docs,
+                    owner_type="carrier_profile",
+                    owner_id=account["id"],
+                    account_id=account["id"],
+                    role="carrier",
+                    description="Document de profil transporteur",
+                )
+                st.session_state.current_account = account
+                apply_account_to_profile(account, sync_widget_state=False)
+                st.rerun()
+            except sqlite3.IntegrityError:
+                show_notice(
+                    "warning",
+                    "Courriel déjà utilisé",
+                    "Cette adresse courriel est déjà utilisée par un autre compte.",
+                )
 
     st.markdown("</div>", unsafe_allow_html=True)
+    if st.session_state.current_account:
+        render_documents_for_owner(
+            "carrier_profile",
+            st.session_state.current_account["id"],
+            empty_message="Aucun document de profil transporteur.",
+        )
 
 
 def render_company_dashboard() -> None:
@@ -2468,6 +4529,9 @@ def render_company_dashboard() -> None:
         subtitle="Cette carte affiche seulement les trajets publies par votre entreprise qui ont encore des voyages disponibles.",
         key="company-market-map",
     )
+
+    with st.expander("Modifier mon profil entreprise", expanded=False):
+        render_company_profile(edit_mode=True)
 
     left_col, right_col = st.columns([1.05, 0.95], gap="large")
 
@@ -2574,6 +4638,12 @@ def render_announcement_form() -> None:
             st.number_input("Prix/voyage (CAD)", min_value=0, step=50, key="announcement_budget")
 
         st.text_area("Consignes speciales", key="announcement_notes", height=110)
+        announcement_documents = st.file_uploader(
+            "Documents facultatifs lies a l'annonce",
+            accept_multiple_files=True,
+            key="announcement_documents",
+            help="Exemple: photo, bon de commande ou consignes supplementaires.",
+        )
 
         action_col1, action_col2 = st.columns(2)
         with action_col1:
@@ -2608,9 +4678,12 @@ def render_announcement_form() -> None:
             ]
         ):
             show_notice("warning", "Champs manquants", "Completer les champs obligatoires avant de publier.")
+        elif not st.session_state.current_account:
+            show_notice("error", "Session invalide", "Reconnectez-vous pour publier une annonce.")
         else:
             announcement = {
                 "id": f"user-{datetime.now().timestamp()}",
+                "companyAccountId": st.session_state.current_account["id"],
                 "title": normalize_text(st.session_state.announcement_title),
                 "pickupAddress": normalize_text(st.session_state.announcement_pickupAddress),
                 "pickupCity": normalize_text(st.session_state.announcement_pickupCity),
@@ -2629,8 +4702,23 @@ def render_announcement_form() -> None:
                 "notes": normalize_text(st.session_state.announcement_notes),
                 "companyName": st.session_state.company_profile["legalName"],
             }
-            st.session_state.announcements.append(announcement)
-            st.session_state.company_ai["assistantMessage"] = "Annonce publiee."
+            saved_announcement = create_announcement_record(announcement)
+            saved_docs = save_uploaded_documents(
+                announcement_documents,
+                owner_type="announcement",
+                owner_id=saved_announcement["id"],
+                account_id=st.session_state.current_account["id"],
+                role="company",
+                description="Document d'annonce",
+            )
+            alerts_count = notify_matching_carrier_alerts(saved_announcement)
+            load_persisted_data_into_session()
+            feedback = "Annonce publiee."
+            if saved_docs:
+                feedback += f" {saved_docs} document(s) ajoute(s)."
+            if alerts_count:
+                feedback += f" {alerts_count} alerte(s) transporteur notifiee(s)."
+            st.session_state.company_ai["assistantMessage"] = feedback
             st.session_state.draft_announcement = create_empty_draft()
             st.session_state.sync_draft_widgets = True
             st.rerun()
@@ -2671,11 +4759,21 @@ def render_company_announcement_card(announcement: dict[str, Any]) -> None:
         """,
         unsafe_allow_html=True,
     )
+    with st.expander(f"Documents - {announcement['title']}", expanded=False):
+        render_documents_for_owner(
+            "announcement",
+            announcement["id"],
+            empty_message="Aucun document lie a cette annonce.",
+        )
     button_cols = st.columns(2)
     if is_announcement_active(announcement):
         with button_cols[0]:
             if st.button(f"Attribuer 1 voyage - {announcement['id']}", key=f"assign-1-{announcement['id']}", use_container_width=True):
-                announcement["remainingTrips"] = max(0, int(announcement["remainingTrips"]) - 1)
+                update_announcement_record(
+                    announcement["id"],
+                    remainingTrips=max(0, int(announcement["remainingTrips"]) - 1),
+                )
+                load_persisted_data_into_session()
                 st.rerun()
         with button_cols[1]:
             if announcement["remainingTrips"] >= 2 and st.button(
@@ -2683,7 +4781,11 @@ def render_company_announcement_card(announcement: dict[str, Any]) -> None:
                 key=f"assign-2-{announcement['id']}",
                 use_container_width=True,
             ):
-                announcement["remainingTrips"] = max(0, int(announcement["remainingTrips"]) - 2)
+                update_announcement_record(
+                    announcement["id"],
+                    remainingTrips=max(0, int(announcement["remainingTrips"]) - 2),
+                )
+                load_persisted_data_into_session()
                 st.rerun()
 
 
@@ -2760,13 +4862,14 @@ def render_map_proposal_panel(
         st.session_state.carrier_profile,
         announcement,
     )
+    company_rating_summary = get_public_rating_summary(announcement.get("companyAccountId", ""))
     st.markdown(
         f"""
         <div class="result-card">
           <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;">
             <div>
               <div class="section-title" style="font-size:1.2rem;margin-top:0;">{announcement['title']}</div>
-              <div class="small-copy">{announcement['companyName']}</div>
+              <div class="small-copy">{announcement['companyName']}<br>Note publique: <strong>{company_rating_summary['label']}</strong></div>
             </div>
             <div class="status-pill">{announcement['remainingTrips']} voyage(s) restant(s)</div>
           </div>
@@ -2785,6 +4888,26 @@ def render_map_proposal_panel(
         </div>
         """,
         unsafe_allow_html=True,
+    )
+    st.caption("Evaluation publique de l'entreprise")
+    render_public_rating_summary(
+        announcement.get("companyAccountId", ""),
+        empty_message="Aucune evaluation publique pour cette entreprise pour le moment.",
+    )
+    with st.expander(
+        f"Voir les commentaires publics sur {announcement['companyName']}",
+        expanded=False,
+    ):
+        render_public_reviews(
+            announcement.get("companyAccountId", ""),
+            empty_message="Aucun commentaire public pour cette entreprise.",
+            limit=5,
+        )
+    st.caption("Documents lies a l'annonce")
+    render_documents_for_owner(
+        "announcement",
+        announcement["id"],
+        empty_message="Aucun document joint a cette annonce.",
     )
     render_service_proposal_form(
         announcement,
@@ -2821,6 +4944,9 @@ def render_carrier_dashboard() -> None:
         selectable=True,
     )
 
+    with st.expander("Modifier mon profil transporteur", expanded=False):
+        render_carrier_profile(edit_mode=True)
+
     if selected_announcement_id:
         current_selection = st.session_state.selected_map_announcement_id
         st.session_state.selected_map_announcement_id = (
@@ -2842,6 +4968,7 @@ def render_carrier_dashboard() -> None:
     with left_col:
         carrier_assistant()
         render_filters_panel()
+        render_alerts_panel()
 
     with right_col:
         render_notifications_panel(
@@ -2992,26 +5119,30 @@ def render_carrier_result_card(result: dict[str, Any]) -> None:
 
 def main() -> None:
     inject_styles()
+    init_database()
     init_state()
     expire_outdated_announcements()
     apply_pending_widget_syncs()
     render_top_bar()
 
-    if st.session_state.active_role is None:
-        render_landing()
+    if get_legal_view() == "privacy":
+        render_privacy_policy_page()
         return
 
-    if st.session_state.active_role == "company":
+    if st.session_state.active_role is None:
+        render_landing()
+    elif st.session_state.active_role == "company":
         if not is_company_profile_complete():
             render_company_profile()
         else:
             render_company_dashboard()
-        return
-
-    if not is_carrier_profile_complete():
-        render_carrier_profile()
     else:
-        render_carrier_dashboard()
+        if not is_carrier_profile_complete():
+            render_carrier_profile()
+        else:
+            render_carrier_dashboard()
+
+    render_privacy_footer()
 
 
 if __name__ == "__main__":
