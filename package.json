@@ -1,9 +1,0 @@
-{
-  "name": "loadsearch",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Prototype local LoadSearch avec assistant Gemini cote serveur.",
-  "scripts": {
-    "start": "node server.js"
-  }
-}

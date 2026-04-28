@@ -26,6 +26,9 @@ MAP_BASE_STYLE = pdk.map_styles.CARTO_ROAD
 PASSWORD_HASH_NAME = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 260_000
 RATABLE_REQUEST_STATUSES = {"accepted"}
+OWNER_ADMIN_EMAIL = os.getenv("LOADSEARCH_OWNER_EMAIL", "willgagne30@gmail.com").strip().lower()
+VERIFICATION_PENDING = "pending"
+VERIFICATION_VERIFIED = "verified"
 
 EQUIPMENT_OPTIONS = [
     "Flatbed",
@@ -53,11 +56,19 @@ SUGGESTED_CARGO_OPTIONS = [
 ]
 
 PROVINCE_OPTIONS = [
-    "Quebec",
-    "Ontario",
+    "Alberta",
+    "Colombie-Britannique",
+    "Ile-du-Prince-Edouard",
+    "Manitoba",
     "Nouveau-Brunswick",
     "Nouvelle-Ecosse",
-    "Manitoba",
+    "Nunavut",
+    "Ontario",
+    "Quebec",
+    "Saskatchewan",
+    "Terre-Neuve-et-Labrador",
+    "Territoires du Nord-Ouest",
+    "Yukon",
 ]
 
 COMPANY_EXAMPLE_PROMPT = (
@@ -113,6 +124,7 @@ def load_env_file(file_path: Path) -> None:
 
 
 load_env_file(ENV_PATH)
+OWNER_ADMIN_EMAIL = os.getenv("LOADSEARCH_OWNER_EMAIL", OWNER_ADMIN_EMAIL).strip().lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -150,6 +162,22 @@ def get_db_connection() -> sqlite3.Connection:
     return connection
 
 
+def ensure_table_columns(
+    connection: sqlite3.Connection,
+    table_name: str,
+    columns: dict[str, str],
+) -> None:
+    existing_columns = {
+        normalize_text(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    for column_name, column_definition in columns.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+            )
+
+
 def init_database() -> None:
     with get_db_connection() as connection:
         connection.execute(
@@ -172,10 +200,20 @@ def init_database() -> None:
                 fleet_size INTEGER NOT NULL DEFAULT 1,
                 regions TEXT NOT NULL DEFAULT '',
                 equipment_types TEXT NOT NULL DEFAULT '[]',
+                verification_status TEXT NOT NULL DEFAULT 'pending',
+                verified_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        ensure_table_columns(
+            connection,
+            "users",
+            {
+                "verification_status": "TEXT NOT NULL DEFAULT 'pending'",
+                "verified_at": "TEXT NOT NULL DEFAULT ''",
+            },
         )
         connection.execute(
             """
@@ -381,6 +419,8 @@ def serialize_account_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "fleetSize": max(1, int(row["fleet_size"] or 1)),
         "regions": normalize_text(row["regions"]),
         "equipmentTypes": equipment_types,
+        "verificationStatus": normalize_text(row["verification_status"]) or VERIFICATION_PENDING,
+        "verifiedAt": normalize_text(row["verified_at"]),
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -560,6 +600,53 @@ def update_carrier_profile_record(account_id: str, profile: dict[str, Any]) -> d
     account = get_account_by_id(account_id)
     if not account:
         raise RuntimeError("Le profil transporteur n'a pas pu etre relu.")
+    return account
+
+
+def list_accounts_by_role(role: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM users WHERE role = ? ORDER BY updated_at DESC, created_at DESC",
+            (normalize_text(role),),
+        ).fetchall()
+    return [item for item in (serialize_account_row(row) for row in rows) if item]
+
+
+def update_account_verification_record(
+    account_id: str,
+    *,
+    verification_status: str,
+) -> dict[str, Any]:
+    normalized_status = (
+        VERIFICATION_VERIFIED
+        if normalize_text(verification_status) == VERIFICATION_VERIFIED
+        else VERIFICATION_PENDING
+    )
+    verified_at = (
+        datetime.now().isoformat(timespec="seconds")
+        if normalized_status == VERIFICATION_VERIFIED
+        else ""
+    )
+    updated_at = datetime.now().isoformat(timespec="seconds")
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE users
+            SET verification_status = ?, verified_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalized_status,
+                verified_at,
+                updated_at,
+                normalize_text(account_id),
+            ),
+        )
+
+    account = get_account_by_id(account_id)
+    if not account:
+        raise RuntimeError("Le compte n'a pas pu etre relu apres la mise a jour.")
     return account
 
 
@@ -1873,6 +1960,69 @@ def get_role_label(role: str) -> str:
     return "entreprise" if role == "company" else "transporteur"
 
 
+def get_verification_status(account: dict[str, Any] | None) -> str:
+    if not account:
+        return VERIFICATION_PENDING
+    status = normalize_text(account.get("verificationStatus"))
+    if status == VERIFICATION_VERIFIED:
+        return VERIFICATION_VERIFIED
+    return VERIFICATION_PENDING
+
+
+def is_account_verified(account: dict[str, Any] | None) -> bool:
+    return get_verification_status(account) == VERIFICATION_VERIFIED
+
+
+def format_verification_label(status: str) -> str:
+    return "Verifie" if normalize_text(status) == VERIFICATION_VERIFIED else "En attente"
+
+
+def build_verification_badge_html(account: dict[str, Any] | None) -> str:
+    status = get_verification_status(account)
+    status_class = "status-pill" if status == VERIFICATION_VERIFIED else "status-pill ai"
+    return f"<span class='{status_class}'>{format_verification_label(status)}</span>"
+
+
+def is_owner_admin_account(account: dict[str, Any] | None) -> bool:
+    if not account:
+        return False
+    return normalize_email(account.get("email")) == OWNER_ADMIN_EMAIL
+
+
+def can_current_account_access_admin() -> bool:
+    return is_owner_admin_account(st.session_state.current_account)
+
+
+def get_current_account_role() -> str:
+    account = st.session_state.current_account or {}
+    return normalize_text(account.get("role"))
+
+
+def render_verification_notice(account: dict[str, Any] | None, *, owner_label: str) -> None:
+    if not account:
+        return
+    if is_account_verified(account):
+        show_notice(
+            "success",
+            f"{owner_label} verifie",
+            "Ce profil a ete approuve par l'administration de LoadSearch.",
+        )
+        return
+
+    message = (
+        f"Le profil {owner_label.lower()} peut etre complete et consulte, "
+        "mais il doit etre verifie par l'administration avant de publier une annonce "
+        "ou proposer des services."
+    )
+    if is_owner_admin_account(account):
+        message += " Comme proprietaire, vous pouvez ouvrir l'espace admin pour verifier les comptes."
+    show_notice(
+        "warning",
+        f"Verification {owner_label.lower()} en attente",
+        message,
+    )
+
+
 def normalize_email(value: Any) -> str:
     return normalize_text(value).lower()
 
@@ -1999,6 +2149,13 @@ def sign_out() -> None:
     st.session_state.pending_role = ""
     st.session_state.auth_message = "Vous êtes déconnecté."
     clear_profile_session_state()
+
+
+def open_admin_space() -> None:
+    if not can_current_account_access_admin():
+        st.session_state.auth_message = "Cet espace admin est reserve au proprietaire de l'application."
+        return
+    st.session_state.active_role = "admin"
 
 
 def is_company_profile_complete() -> bool:
@@ -2230,6 +2387,11 @@ def create_service_request(
     current_account = st.session_state.current_account or {}
     if not is_carrier_profile_complete():
         return False, "Le profil transporteur doit etre complet."
+    if not is_account_verified(current_account) and not is_owner_admin_account(current_account):
+        return (
+            False,
+            "Votre compte transporteur doit etre verifie par l'administration avant de proposer votre service.",
+        )
 
     for request in st.session_state.service_requests:
         if (
@@ -3574,6 +3736,29 @@ def apply_filters_to_widgets() -> None:
     st.session_state.filter_equipment = filters["equipment"]
 
 
+def get_company_announcement_status(announcement: dict[str, Any]) -> str:
+    if is_announcement_expired(announcement):
+        return "Expiree"
+    if int(announcement["remainingTrips"]) > 0:
+        return "Active"
+    return "Completee"
+
+
+def infer_notification_state(notification: dict[str, Any]) -> str:
+    title = normalize_for_match(notification.get("title"))
+    if "acceptee" in title or "accepte" in title:
+        return "Acceptee"
+    if "refusee" in title or "refuse" in title:
+        return "Refusee"
+    if "verifie" in title:
+        return "Verifie"
+    if "retiree" in title or "retire" in title:
+        return "Retiree"
+    if "nouvelle" in title:
+        return "Nouvelle"
+    return "Info"
+
+
 def render_notifications_panel(
     notifications: list[dict[str, Any]], title: str, empty_message: str
 ) -> None:
@@ -3587,20 +3772,17 @@ def render_notifications_panel(
         return
 
     for notification in notifications:
-        st.markdown(
-            f"""
-            <div class="result-card">
-              <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;">
-                <div>
-                  <div class="section-title" style="font-size:1.05rem;margin-top:0;">{notification['title']}</div>
-                  <div class="small-copy">{notification['message']}</div>
-                </div>
-                <div class="status-pill ai">{notification['createdAt']}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        notification_state = infer_notification_state(notification)
+        expander_label = (
+            f"{notification['title']} | {notification_state} | {notification['createdAt']}"
         )
+        with st.expander(expander_label, expanded=False):
+            st.caption("Etat")
+            st.write(notification_state)
+            st.caption("Date")
+            st.write(notification["createdAt"] or "Non precisee")
+            st.caption("Detail")
+            st.write(notification["message"] or "Aucun detail disponible.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -3927,6 +4109,231 @@ def render_alerts_panel() -> None:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
+def process_account_verification(
+    account_id: str,
+    *,
+    verification_status: str,
+) -> tuple[bool, str]:
+    account = get_account_by_id(account_id)
+    if not account:
+        return False, "Compte introuvable."
+
+    updated_account = update_account_verification_record(
+        account_id,
+        verification_status=verification_status,
+    )
+    current_account = st.session_state.current_account or {}
+    if normalize_text(current_account.get("id")) == updated_account["id"]:
+        st.session_state.current_account = updated_account
+        apply_account_to_profile(updated_account, sync_widget_state=False)
+
+    if verification_status == VERIFICATION_VERIFIED:
+        add_notification(
+            recipient_role=updated_account["role"],
+            recipient_name=updated_account["businessName"],
+            recipient_account_id=updated_account["id"],
+            title="Compte verifie",
+            message=(
+                f"Votre compte {get_role_label(updated_account['role'])} a ete verifie "
+                "par l'administration de LoadSearch."
+            ),
+        )
+        return_message = "Le compte a ete verifie."
+    else:
+        add_notification(
+            recipient_role=updated_account["role"],
+            recipient_name=updated_account["businessName"],
+            recipient_account_id=updated_account["id"],
+            title="Verification retiree",
+            message=(
+                f"Votre compte {get_role_label(updated_account['role'])} est revenu "
+                "en attente de verification administrative."
+            ),
+        )
+        return_message = "Le compte est repasse en attente de verification."
+
+    load_persisted_data_into_session()
+    return True, return_message
+
+
+def render_admin_account_card(account: dict[str, Any]) -> None:
+    role_label = "Entreprise" if account["role"] == "company" else "Transporteur"
+    status_html = build_verification_badge_html(account)
+    verified_at = normalize_text(account.get("verifiedAt"))
+    account_label = account["legalName"] if account["role"] == "company" else account["transportCompany"]
+    st.markdown(
+        f"""
+        <div class="result-card">
+          <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;">
+            <div>
+              <div class="section-title" style="font-size:1.15rem;margin-top:0;">{account_label}</div>
+              <div class="small-copy">
+                Type de compte: <strong>{role_label}</strong><br>
+                Responsable: <strong>{account['contactName'] or 'Non renseigne'}</strong><br>
+                Courriel: {account['email'] or 'Non renseigne'}<br>
+                Telephone: {account['phone'] or 'Non renseigne'}<br>
+                Numero d'entreprise: <strong>{account['businessNumber'] or 'Non renseigne'}</strong><br>
+                Derniere verification: <strong>{verified_at or 'Jamais'}</strong>
+              </div>
+            </div>
+            <div>{status_html}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    details_col1, details_col2 = st.columns(2)
+    with details_col1:
+        if account["role"] == "company":
+            st.caption("Ville")
+            st.write(account.get("city") or "Non renseignee")
+            st.caption("Province")
+            st.write(account.get("province") or "Non renseignee")
+            st.caption("Secteur d'activite")
+            st.write(account.get("industry") or "Non renseigne")
+        else:
+            st.caption("Numero d'assurance")
+            st.write(account.get("insuranceNumber") or "Non renseigne")
+            st.caption("Nombre de camions")
+            st.write(account.get("fleetSize") or "Non renseigne")
+            st.caption("Regions desservies")
+            st.write(account.get("regions") or "Non renseignees")
+    with details_col2:
+        if account["role"] == "carrier":
+            st.caption("Equipements")
+            equipment_html = " ".join(
+                f"<span class='status-pill'>{item}</span>"
+                for item in (account.get("equipmentTypes") or [])
+            )
+            st.markdown(
+                equipment_html or "<div class='small-copy'>Aucun equipement renseigne.</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("Evaluation publique")
+            render_public_rating_summary(
+                account["id"],
+                empty_message="Aucune evaluation publique pour cette entreprise.",
+            )
+
+    st.caption("Documents de profil")
+    render_documents_for_owner(
+        "company_profile" if account["role"] == "company" else "carrier_profile",
+        account["id"],
+        empty_message="Aucun document de profil ajoute.",
+    )
+
+    action_cols = st.columns(2)
+    if is_account_verified(account):
+        with action_cols[0]:
+            if st.button(
+                f"Retirer la verification - {account['id']}",
+                key=f"admin-pending-{account['id']}",
+                use_container_width=True,
+            ):
+                ok, message = process_account_verification(
+                    account["id"],
+                    verification_status=VERIFICATION_PENDING,
+                )
+                if ok:
+                    st.success(message)
+                    st.rerun()
+                st.error(message)
+    else:
+        with action_cols[0]:
+            if st.button(
+                f"Verifier ce compte - {account['id']}",
+                key=f"admin-verify-{account['id']}",
+                type="primary",
+                use_container_width=True,
+            ):
+                ok, message = process_account_verification(
+                    account["id"],
+                    verification_status=VERIFICATION_VERIFIED,
+                )
+                if ok:
+                    st.success(message)
+                    st.rerun()
+                st.error(message)
+
+
+def render_admin_accounts_section(accounts: list[dict[str, Any]], *, role: str) -> None:
+    sorted_accounts = sorted(
+        accounts,
+        key=lambda item: (
+            0 if get_verification_status(item) == VERIFICATION_PENDING else 1,
+            normalize_for_match(item.get("businessName")),
+        ),
+    )
+    if not sorted_accounts:
+        role_label = "entreprise" if role == "company" else "transporteur"
+        show_notice(
+            "info",
+            "Aucun compte a verifier",
+            f"Aucun compte {role_label} n'a encore ete cree.",
+        )
+        return
+
+    for account in sorted_accounts:
+        render_admin_account_card(account)
+
+
+def render_admin_dashboard() -> None:
+    if not can_current_account_access_admin():
+        show_notice(
+            "error",
+            "Acces refuse",
+            "Cet espace est reserve au proprietaire de l'application.",
+        )
+        return
+
+    company_accounts = list_accounts_by_role("company")
+    carrier_accounts = list_accounts_by_role("carrier")
+    pending_companies = sum(
+        1 for account in company_accounts if get_verification_status(account) == VERIFICATION_PENDING
+    )
+    pending_carriers = sum(
+        1 for account in carrier_accounts if get_verification_status(account) == VERIFICATION_PENDING
+    )
+    verified_total = sum(
+        1
+        for account in company_accounts + carrier_accounts
+        if get_verification_status(account) == VERIFICATION_VERIFIED
+    )
+
+    metrics = st.columns(3)
+    for column, label, value in [
+        (metrics[0], "Entreprises en attente", pending_companies),
+        (metrics[1], "Transporteurs en attente", pending_carriers),
+        (metrics[2], "Comptes verifies", verified_total),
+    ]:
+        with column:
+            st.markdown(
+                f"""
+                <div class="metric-card">
+                  <div class="metric-label">{label}</div>
+                  <div class="metric-value">{value}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Admin</span>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Verification des comptes</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<p class='small-copy'>Revoyez les entreprises et transporteurs, consultez leurs informations de profil et leurs documents, puis approuvez ou retirez leur verification.</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    company_tab, carrier_tab = st.tabs(["Entreprises", "Transporteurs"])
+    with company_tab:
+        render_admin_accounts_section(company_accounts, role="company")
+    with carrier_tab:
+        render_admin_accounts_section(carrier_accounts, role="carrier")
 
 def render_top_bar() -> None:
     if st.session_state.active_role is None:
@@ -4315,6 +4722,7 @@ def render_landing() -> None:
 
 def render_company_profile(*, edit_mode: bool = False) -> None:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    current_account = st.session_state.current_account
     if edit_mode:
         st.markdown("<span class='eyebrow'>Profil</span>", unsafe_allow_html=True)
         st.markdown("<div class='section-title'>Modifier votre profil entreprise</div>", unsafe_allow_html=True)
@@ -4329,6 +4737,8 @@ def render_company_profile(*, edit_mode: bool = False) -> None:
             "<p class='small-copy'>Tant que ce profil n'est pas rempli, vous ne pouvez pas publier d'annonce.</p>",
             unsafe_allow_html=True,
         )
+    if current_account and current_account.get("role") == "company":
+        render_verification_notice(current_account, owner_label="Compte entreprise")
 
     form_key = "company_profile_form_edit" if edit_mode else "company_profile_form"
     submit_label = "Enregistrer les modifications" if edit_mode else "Enregistrer le profil et continuer"
@@ -4405,6 +4815,7 @@ def render_company_profile(*, edit_mode: bool = False) -> None:
 
 def render_carrier_profile(*, edit_mode: bool = False) -> None:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    current_account = st.session_state.current_account
     if edit_mode:
         st.markdown("<span class='eyebrow'>Profil</span>", unsafe_allow_html=True)
         st.markdown("<div class='section-title'>Modifier votre profil transporteur</div>", unsafe_allow_html=True)
@@ -4419,6 +4830,8 @@ def render_carrier_profile(*, edit_mode: bool = False) -> None:
             "<p class='small-copy'>Tant que ce profil n'est pas rempli, vous ne pouvez pas chercher des voyages.</p>",
             unsafe_allow_html=True,
         )
+    if current_account and current_account.get("role") == "carrier":
+        render_verification_notice(current_account, owner_label="Compte transporteur")
 
     form_key = "carrier_profile_form_edit" if edit_mode else "carrier_profile_form"
     submit_label = "Enregistrer les modifications" if edit_mode else "Enregistrer le profil et continuer"
@@ -4495,6 +4908,10 @@ def render_carrier_profile(*, edit_mode: bool = False) -> None:
 
 
 def render_company_dashboard() -> None:
+    render_verification_notice(
+        st.session_state.current_account,
+        owner_label="Compte entreprise",
+    )
     company_announcements = get_company_announcements()
     active_count = sum(1 for item in company_announcements if is_announcement_active(item))
     complete_count = sum(
@@ -4564,6 +4981,14 @@ def render_announcement_form() -> None:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
     st.markdown("<span class='eyebrow'>Nouvelle annonce</span>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Creer un besoin de transport</div>", unsafe_allow_html=True)
+    current_account = st.session_state.current_account or {}
+    publish_allowed = is_account_verified(current_account) or is_owner_admin_account(current_account)
+    if not publish_allowed:
+        show_notice(
+            "warning",
+            "Verification requise",
+            "Votre entreprise doit etre verifiee par l'administration avant de publier une annonce.",
+        )
 
     cargo_options = [""] + SUGGESTED_CARGO_OPTIONS + [OTHER_CARGO_VALUE]
     cargo_labels = {
@@ -4680,6 +5105,12 @@ def render_announcement_form() -> None:
             show_notice("warning", "Champs manquants", "Completer les champs obligatoires avant de publier.")
         elif not st.session_state.current_account:
             show_notice("error", "Session invalide", "Reconnectez-vous pour publier une annonce.")
+        elif not publish_allowed:
+            show_notice(
+                "error",
+                "Compte non verifie",
+                "L'administration doit verifier votre entreprise avant la publication d'annonces.",
+            )
         else:
             announcement = {
                 "id": f"user-{datetime.now().timestamp()}",
@@ -4917,6 +5348,10 @@ def render_map_proposal_panel(
 
 
 def render_carrier_dashboard() -> None:
+    render_verification_notice(
+        st.session_state.current_account,
+        owner_label="Compte transporteur",
+    )
     metrics = st.columns(3)
     for column, label, value in [
         (metrics[0], "Camions declares", st.session_state.carrier_profile["fleetSize"]),
@@ -5117,6 +5552,278 @@ def render_carrier_result_card(result: dict[str, Any]) -> None:
             st.error(message)
 
 
+def render_alerts_panel() -> None:
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Alertes</span>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Mes alertes transporteur</div>", unsafe_allow_html=True)
+
+    current_account = st.session_state.current_account or {}
+    carrier_account_id = normalize_text(current_account.get("id"))
+    if not carrier_account_id:
+        show_notice("info", "Connexion requise", "Connectez-vous pour enregistrer des alertes.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    with st.form("carrier_alert_form_compact"):
+        title = st.text_input(
+            "Nom de l'alerte",
+            placeholder="Exemple: Flatbed Quebec -> Maine",
+        )
+        alert_cols = st.columns(2)
+        with alert_cols[0]:
+            pickup_city = st.text_input(
+                "Chargement contient",
+                value=st.session_state.filters["pickupCity"],
+            )
+            cargo_type = st.selectbox(
+                "Marchandise",
+                options=[""] + get_cargo_filter_options(),
+                format_func=lambda value: "Toutes" if not value else value,
+                key="carrier_alert_form_compact_cargoType",
+            )
+        with alert_cols[1]:
+            delivery_city = st.text_input(
+                "Livraison contient",
+                value=st.session_state.filters["deliveryCity"],
+            )
+            equipment = st.selectbox(
+                "Equipement requis",
+                options=[""] + EQUIPMENT_OPTIONS,
+                format_func=lambda value: "Tous" if not value else value,
+                key="carrier_alert_form_compact_equipment",
+            )
+        submit_alert = st.form_submit_button("Creer l'alerte", use_container_width=True)
+
+    if submit_alert:
+        if not any(
+            normalize_text(value)
+            for value in [title, pickup_city, delivery_city, cargo_type, equipment]
+        ):
+            show_notice(
+                "warning",
+                "Critere manquant",
+                "Ajoutez au moins un critere pour creer une alerte utile.",
+            )
+        else:
+            alert = create_carrier_alert_record(
+                {
+                    "carrierAccountId": carrier_account_id,
+                    "carrierName": st.session_state.carrier_profile["transportCompany"],
+                    "title": normalize_text(title) or "Alerte transporteur",
+                    "pickupCity": normalize_text(pickup_city),
+                    "deliveryCity": normalize_text(delivery_city),
+                    "cargoType": normalize_text(cargo_type),
+                    "equipment": normalize_text(equipment),
+                    "isActive": True,
+                }
+            )
+            current_matches = sum(
+                1
+                for announcement in get_active_announcements()
+                if alert_matches_announcement(alert, announcement)
+            )
+            show_notice(
+                "success",
+                "Alerte enregistree",
+                f"Votre alerte est active. {current_matches} annonce(s) active(s) correspondent deja a ces criteres.",
+            )
+
+    alerts = list_carrier_alerts(carrier_account_id)
+    if not alerts:
+        show_notice(
+            "info",
+            "Aucune alerte enregistree",
+            "Creez une alerte pour etre averti quand une nouvelle annonce correspond a votre equipement ou a vos regions.",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    for alert in alerts:
+        matches_count = sum(
+            1
+            for announcement in get_active_announcements()
+            if alert_matches_announcement(alert, announcement)
+        )
+        label_parts = [
+            alert["pickupCity"] or "Tous chargements",
+            alert["deliveryCity"] or "Toutes livraisons",
+            alert["cargoType"] or "Toute marchandise",
+            alert["equipment"] or "Tout equipement",
+        ]
+        expander_label = f"{alert['title']} | Active | {matches_count} annonce(s)"
+        with st.expander(expander_label, expanded=False):
+            st.caption("Filtres")
+            st.write(" | ".join(label_parts))
+            st.caption("Correspondances actuelles")
+            st.write(f"{matches_count} annonce(s) active(s) correspondent actuellement.")
+            if st.button(
+                "Supprimer cette alerte",
+                key=f"delete-alert-compact-{alert['id']}",
+                use_container_width=True,
+            ):
+                delete_carrier_alert_record(alert["id"])
+                st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_company_announcement_card(announcement: dict[str, Any]) -> None:
+    status = get_company_announcement_status(announcement)
+    summary = (
+        f"{announcement['title']} | {status} | "
+        f"{announcement['remainingTrips']} / {announcement['tripsTotal']} voyage(s)"
+    )
+
+    with st.expander(summary, expanded=False):
+        st.markdown(
+            f"""
+            <div class="small-copy">
+              Trajet: <strong>{announcement['pickupCity']} -> {announcement['deliveryCity']}</strong><br>
+              Chargement exact: <strong>{format_exact_location(announcement.get('pickupAddress'), announcement.get('pickupCity'), announcement.get('pickupPostalCode'))}</strong><br>
+              Livraison exacte: <strong>{format_exact_location(announcement.get('deliveryAddress'), announcement.get('deliveryCity'), announcement.get('deliveryPostalCode'))}</strong><br>
+              Marchandise: <strong>{announcement['cargoType']}</strong><br>
+              Equipement: <strong>{announcement['equipment']}</strong><br>
+              Livraison: <strong>{format_date(get_delivery_date(announcement))}</strong><br>
+              Prix/voyage: <strong>{format_currency(get_price_per_trip(announcement))}</strong><br>
+              Voyages restants: <strong>{announcement['remainingTrips']} / {announcement['tripsTotal']}</strong>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if normalize_text(announcement.get("notes")):
+            st.caption("Consignes")
+            st.write(announcement["notes"])
+        st.caption("Documents")
+        render_documents_for_owner(
+            "announcement",
+            announcement["id"],
+            empty_message="Aucun document lie a cette annonce.",
+        )
+        if is_announcement_active(announcement):
+            button_cols = st.columns(2)
+            with button_cols[0]:
+                if st.button(
+                    f"Attribuer 1 voyage",
+                    key=f"assign-1-compact-{announcement['id']}",
+                    use_container_width=True,
+                ):
+                    update_announcement_record(
+                        announcement["id"],
+                        remainingTrips=max(0, int(announcement["remainingTrips"]) - 1),
+                    )
+                    load_persisted_data_into_session()
+                    st.rerun()
+            with button_cols[1]:
+                if announcement["remainingTrips"] >= 2 and st.button(
+                    "Attribuer 2 voyages",
+                    key=f"assign-2-compact-{announcement['id']}",
+                    use_container_width=True,
+                ):
+                    update_announcement_record(
+                        announcement["id"],
+                        remainingTrips=max(0, int(announcement["remainingTrips"]) - 2),
+                    )
+                    load_persisted_data_into_session()
+                    st.rerun()
+
+
+def render_landing_auth_actions() -> None:
+    account = st.session_state.current_account
+    st.markdown("<div class='auth-action-bar'>", unsafe_allow_html=True)
+    if account:
+        st.markdown(
+            f"""
+            <div class="auth-state">
+              Connecte comme <strong>{account['businessName']}</strong>
+              ({get_role_label(account['role'])}).
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        action_cols = st.columns(3 if is_owner_admin_account(account) else 2)
+        with action_cols[0]:
+            if st.button("Continuer", type="primary", use_container_width=True, key="landing-continue-account"):
+                continue_as_role(account["role"])
+        with action_cols[1]:
+            if st.button("Se deconnecter", use_container_width=True, key="landing-signout-account"):
+                sign_out()
+                st.rerun()
+        if is_owner_admin_account(account):
+            with action_cols[2]:
+                if st.button("Espace admin", use_container_width=True, key="landing-admin-space"):
+                    open_admin_space()
+                    st.rerun()
+    else:
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            if st.button("Connexion", use_container_width=True, key="landing-login-open"):
+                st.session_state.auth_view = "login"
+                st.session_state.auth_message = ""
+                st.rerun()
+        with action_cols[1]:
+            if st.button("S'inscrire", use_container_width=True, key="landing-signup-open"):
+                st.session_state.auth_view = "signup_choice"
+                st.session_state.auth_message = ""
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_top_bar() -> None:
+    if st.session_state.active_role is None:
+        st.markdown(
+            f"""
+            <div class="top-shell" style="text-align:center;">
+              <div class="brand-title">{APP_NAME}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    col1, col2 = st.columns([2.2, 1.2], vertical_alignment="center")
+    with col1:
+        st.markdown(
+            f"""
+            <div class="top-shell">
+              <div class="brand-title">{APP_NAME}</div>
+              <div class="brand-copy">Marketplace logistique pour PME et petits transporteurs, avec aide a la creation d'annonces et au matching.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with col2:
+        if st.session_state.active_role == "company":
+            current_space = "Espace entreprise"
+        elif st.session_state.active_role == "carrier":
+            current_space = "Espace transporteur"
+        else:
+            current_space = "Espace admin"
+        st.markdown(f"<div class='status-pill'>{current_space}</div>", unsafe_allow_html=True)
+        if st.session_state.active_role == "admin":
+            if st.button("Retour a mon espace", use_container_width=True, key="topbar-back-user-space"):
+                st.session_state.active_role = get_current_account_role() or None
+                st.rerun()
+        else:
+            if st.button("Retour a l'accueil", use_container_width=True, key="topbar-back-home"):
+                st.session_state.active_role = None
+                st.rerun()
+            if can_current_account_access_admin() and st.button(
+                "Espace admin",
+                use_container_width=True,
+                key="topbar-admin-space",
+            ):
+                open_admin_space()
+                st.rerun()
+        if st.button("Se deconnecter", use_container_width=True, key="topbar-signout"):
+            sign_out()
+            st.rerun()
+        if st.button("Reinitialiser la demo", use_container_width=True, key="topbar-reset-demo"):
+            reset_demo_data()
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+
 def main() -> None:
     inject_styles()
     init_database()
@@ -5131,6 +5838,11 @@ def main() -> None:
 
     if st.session_state.active_role is None:
         render_landing()
+    elif st.session_state.active_role == "admin":
+        if not can_current_account_access_admin():
+            st.session_state.active_role = get_current_account_role() or None
+            st.rerun()
+        render_admin_dashboard()
     elif st.session_state.active_role == "company":
         if not is_company_profile_complete():
             render_company_profile()
