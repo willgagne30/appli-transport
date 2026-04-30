@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pydeck as pdk
 import requests
@@ -29,6 +30,147 @@ RATABLE_REQUEST_STATUSES = {"accepted"}
 OWNER_ADMIN_EMAIL = os.getenv("LOADSEARCH_OWNER_EMAIL", "willgagne30@gmail.com").strip().lower()
 VERIFICATION_PENDING = "pending"
 VERIFICATION_VERIFIED = "verified"
+PRICE_FILTER_DEFAULT_MIN = 100
+PRICE_FILTER_DEFAULT_MAX = 20_000
+PRICE_FILTER_STEP = 50
+LANDING_BACKGROUND_URL = "https://images.pexels.com/photos/16663692/pexels-photo-16663692.jpeg?cs=srgb&dl=pexels-bogdankrupin-16663692.jpg&fm=jpg"
+CARRIER_BACKGROUND_URL = "https://images.pexels.com/photos/12396171/pexels-photo-12396171.jpeg?cs=srgb&dl=pexels-lolimjoshingyou-12396171.jpg&fm=jpg"
+COMPANY_BACKGROUND_URL = "https://unsplash.com/photos/V2GZeHNwP5w/download?force=true&w=1600"
+
+LANDING_BACKGROUND_SVG = """
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'>
+  <defs>
+    <linearGradient id='bg' x1='0' y1='0' x2='1' y2='1'>
+      <stop offset='0%' stop-color='#02101f'/>
+      <stop offset='55%' stop-color='#07182e'/>
+      <stop offset='100%' stop-color='#0b203d'/>
+    </linearGradient>
+    <radialGradient id='glow' cx='55%' cy='35%' r='60%'>
+      <stop offset='0%' stop-color='#60a5fa' stop-opacity='.28'/>
+      <stop offset='100%' stop-color='#60a5fa' stop-opacity='0'/>
+    </radialGradient>
+  </defs>
+  <rect width='1600' height='900' fill='url(#bg)'/>
+  <rect width='1600' height='900' fill='url(#glow)'/>
+  <g opacity='.14' stroke='#8dc6ff' fill='none' stroke-width='2'>
+    <path d='M90 650C340 540 570 535 805 640s472 108 710-42'/>
+    <path d='M170 320C365 260 555 275 745 360s390 96 620 20'/>
+    <path d='M220 520C382 410 565 396 762 470s420 78 585-18'/>
+  </g>
+  <g opacity='.18' fill='#0c1d36' stroke='#8dc6ff' stroke-width='2'>
+    <path d='M210 350l90-70 105 18 86 72-56 96-110 38-135-34z'/>
+    <path d='M560 250l112-58 138 28 78 105-90 108-160 7-108-72z'/>
+    <path d='M955 240l138-45 146 32 84 90-70 102-148 20-124-44-64-86z'/>
+  </g>
+  <g fill='#b9dcff'>
+    <circle cx='300' cy='392' r='7'/>
+    <circle cx='648' cy='302' r='7'/>
+    <circle cx='1110' cy='304' r='7'/>
+    <circle cx='760' cy='528' r='7'/>
+    <circle cx='1248' cy='494' r='7'/>
+  </g>
+  <g opacity='.7' stroke='#e3f2ff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round' fill='none' transform='translate(1115 580)'>
+    <path d='M0 68h210l28-30h62l24 30h42'/>
+    <path d='M38 68v-54h150v54'/>
+    <path d='M222 68v-54h75l42 54'/>
+    <circle cx='72' cy='78' r='16'/>
+    <circle cx='252' cy='78' r='16'/>
+    <circle cx='332' cy='78' r='16'/>
+  </g>
+</svg>
+"""
+
+CARRIER_BACKGROUND_SVG = """
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'>
+  <defs>
+    <linearGradient id='bg' x1='0' y1='0' x2='1' y2='1'>
+      <stop offset='0%' stop-color='#041220'/>
+      <stop offset='100%' stop-color='#0b1f35'/>
+    </linearGradient>
+    <linearGradient id='road' x1='0' y1='0' x2='1' y2='0'>
+      <stop offset='0%' stop-color='#10223a'/>
+      <stop offset='100%' stop-color='#17314f'/>
+    </linearGradient>
+  </defs>
+  <rect width='1600' height='900' fill='url(#bg)'/>
+  <g opacity='.16' fill='#11345d'>
+    <path d='M0 315l146-92 164 80 176-102 166 108 154-84 144 102 152-63 178 73v563H0z'/>
+  </g>
+  <path d='M-60 770C274 675 596 655 912 706s556 84 762 42' fill='none' stroke='url(#road)' stroke-width='170' stroke-linecap='round' opacity='.82'/>
+  <path d='M-20 770C308 686 612 670 916 717s544 78 732 38' fill='none' stroke='#dbeafe' stroke-width='8' stroke-linecap='round' stroke-dasharray='24 24' opacity='.52'/>
+  <g opacity='.76' stroke='#e8f3ff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round' fill='none'>
+    <g transform='translate(360 560) scale(1.08)'>
+      <path d='M0 78h184l24-28h58l22 28h38'/>
+      <path d='M28 78v-60h132v60'/>
+      <path d='M194 78v-60h68l36 60'/>
+      <circle cx='58' cy='90' r='16'/>
+      <circle cx='216' cy='90' r='16'/>
+      <circle cx='286' cy='90' r='16'/>
+    </g>
+    <g transform='translate(815 505) scale(.86)'>
+      <path d='M0 78h184l24-28h58l22 28h38'/>
+      <path d='M28 78v-60h132v60'/>
+      <path d='M194 78v-60h68l36 60'/>
+      <circle cx='58' cy='90' r='16'/>
+      <circle cx='216' cy='90' r='16'/>
+      <circle cx='286' cy='90' r='16'/>
+    </g>
+    <g transform='translate(1125 470) scale(.72)'>
+      <path d='M0 78h184l24-28h58l22 28h38'/>
+      <path d='M28 78v-60h132v60'/>
+      <path d='M194 78v-60h68l36 60'/>
+      <circle cx='58' cy='90' r='16'/>
+      <circle cx='216' cy='90' r='16'/>
+      <circle cx='286' cy='90' r='16'/>
+    </g>
+  </g>
+</svg>
+"""
+
+COMPANY_BACKGROUND_SVG = """
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'>
+  <defs>
+    <linearGradient id='bg' x1='0' y1='0' x2='1' y2='1'>
+      <stop offset='0%' stop-color='#03101e'/>
+      <stop offset='100%' stop-color='#0a1e34'/>
+    </linearGradient>
+    <linearGradient id='floor' x1='0' y1='0' x2='0' y2='1'>
+      <stop offset='0%' stop-color='#112942'/>
+      <stop offset='100%' stop-color='#08192c'/>
+    </linearGradient>
+  </defs>
+  <rect width='1600' height='900' fill='url(#bg)'/>
+  <rect y='610' width='1600' height='290' fill='url(#floor)' opacity='.88'/>
+  <g opacity='.2' fill='#15375c'>
+    <rect x='90' y='340' width='230' height='248' rx='14'/>
+    <rect x='338' y='286' width='240' height='302' rx='14'/>
+    <rect x='612' y='242' width='280' height='346' rx='18'/>
+    <rect x='926' y='312' width='252' height='276' rx='16'/>
+    <rect x='1208' y='354' width='252' height='234' rx='16'/>
+  </g>
+  <g opacity='.34' stroke='#92c8ff' stroke-width='4' fill='none'>
+    <path d='M116 588V388h178v200'/>
+    <path d='M368 588V330h182v258'/>
+    <path d='M640 588V286h222v302'/>
+    <path d='M956 588V354h192v234'/>
+    <path d='M1238 588V392h192v196'/>
+    <path d='M640 372h222'/>
+    <path d='M640 450h222'/>
+    <path d='M368 408h182'/>
+    <path d='M956 430h192'/>
+  </g>
+  <g opacity='.7' stroke='#e8f3ff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round' fill='none'>
+    <path d='M142 588h130v-74h-52v28h-26v-28h-52z'/>
+    <path d='M1110 588v-236h44v236'/>
+    <path d='M1154 380h98'/>
+    <path d='M1214 380v-88'/>
+    <path d='M1214 292l56 40'/>
+    <path d='M760 588h238v-110H760z'/>
+    <path d='M788 478h50v42h-50z'/>
+    <path d='M860 478h50v42h-50z'/>
+  </g>
+</svg>
+"""
 
 EQUIPMENT_OPTIONS = [
     "Flatbed",
@@ -78,9 +220,9 @@ COMPANY_EXAMPLE_PROMPT = (
 )
 
 CARRIER_EXAMPLE_PROMPT = (
-    "Je suis un petit transporteur avec 2 camions flatbed et drybox. Je "
-    "cherche surtout des voyages autour de Montreal, Laval, Trois-Rivieres, "
-    "Quebec ou Ottawa."
+    "Je cherche surtout des voyages avec livraison a Toronto ou Ottawa, "
+    "autour de 1500 a 2500 CAD par voyage, idealement pour des entreprises "
+    "de construction."
 )
 
 CITY_COORDINATES = {
@@ -1285,16 +1427,58 @@ st.set_page_config(
 )
 
 
-def inject_styles() -> None:
-    st.markdown(
-        """
+def svg_to_data_uri(svg: str) -> str:
+    return f"data:image/svg+xml;utf8,{quote(' '.join(svg.split()))}"
+
+
+def get_visual_theme() -> str:
+    active_role = st.session_state.get("active_role")
+    if active_role == "company":
+        return "company"
+    if active_role == "carrier":
+        return "carrier"
+    if active_role == "admin":
+        return "company"
+    return "landing"
+
+
+def get_background_art_data_uri(theme: str) -> str:
+    assets = {
+        "landing": LANDING_BACKGROUND_URL,
+        "carrier": CARRIER_BACKGROUND_URL,
+        "company": COMPANY_BACKGROUND_URL,
+    }
+    return assets.get(theme, assets["landing"])
+
+
+def inject_styles(theme: str) -> None:
+    background_art = get_background_art_data_uri(theme)
+    css = """
         <style>
+        :root {
+          --ls-bg: #0b1220;
+          --ls-bg-deep: #070d17;
+          --ls-surface: rgba(10, 16, 26, 0.74);
+          --ls-surface-soft: rgba(16, 24, 36, 0.6);
+          --ls-border: rgba(163, 176, 194, 0.14);
+          --ls-text: #f3f7fb;
+          --ls-text-soft: #a8b4c4;
+          --ls-steel: #355a7a;
+          --ls-steel-soft: rgba(53, 93, 122, 0.46);
+          --ls-accent: #f97316;
+          --ls-accent-strong: #ea580c;
+          --ls-accent-soft: rgba(249, 115, 22, 0.18);
+        }
         .stApp {
-          background:
-            radial-gradient(circle at top left, rgba(30, 58, 138, 0.46), transparent 30%),
-            radial-gradient(circle at bottom right, rgba(29, 78, 216, 0.18), transparent 32%),
-            linear-gradient(135deg, #020617, #07111f 46%, #0b1629);
-          color: #e5f2ff;
+          background-image:
+            linear-gradient(135deg, rgba(7, 13, 23, 0.8), rgba(11, 18, 32, 0.82) 38%, rgba(18, 27, 39, 0.78)),
+            radial-gradient(circle at top left, rgba(249, 115, 22, 0.12), transparent 28%),
+            radial-gradient(circle at bottom right, rgba(53, 93, 122, 0.18), transparent 32%),
+            url("__BACKGROUND_ART__");
+          background-position: center;
+          background-size: cover;
+          background-repeat: no-repeat;
+          color: var(--ls-text);
         }
         .block-container {
           padding-top: 1.45rem;
@@ -1302,21 +1486,53 @@ def inject_styles() -> None:
           max-width: 1280px;
         }
         .top-shell {
-          padding: 0.25rem 0;
-          border: 0;
-          background: transparent;
-          box-shadow: none;
-          margin-bottom: 0.75rem;
+          padding: 1.1rem 1.2rem;
+          border-radius: 26px;
+          border: 1px solid var(--ls-border);
+          background:
+            linear-gradient(135deg, rgba(8, 13, 21, 0.74), rgba(16, 24, 36, 0.56));
+          box-shadow: 0 18px 42px rgba(1, 8, 19, 0.24);
+          backdrop-filter: blur(18px);
+          margin-bottom: 0.8rem;
         }
         .brand-title {
-          font-size: 2rem;
+          font-size: 2.35rem;
           font-weight: 800;
-          color: #f8fbff;
+          color: var(--ls-text);
           margin-bottom: 0.25rem;
         }
         .brand-copy {
-          color: #a9bfdf;
+          color: var(--ls-text-soft);
           line-height: 1.6;
+        }
+        .nav-shell {
+          padding: 1.1rem 1rem;
+          border-radius: 24px;
+          border: 1px solid var(--ls-border);
+          background:
+            linear-gradient(180deg, rgba(8, 13, 21, 0.78), rgba(14, 21, 32, 0.58));
+          box-shadow: 0 16px 34px rgba(2, 6, 23, 0.2);
+          backdrop-filter: blur(18px);
+          min-height: 100%;
+        }
+        .nav-label {
+          color: #d1d9e4;
+          font-size: 0.78rem;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          margin-bottom: 0.45rem;
+        }
+        .nav-value {
+          color: var(--ls-text);
+          font-size: 1.1rem;
+          font-weight: 800;
+          line-height: 1.3;
+        }
+        .nav-copy {
+          color: var(--ls-text-soft);
+          font-size: 0.9rem;
+          line-height: 1.55;
+          margin-top: 0.35rem;
         }
         .hero-card, .soft-card {
           border: 0;
@@ -1344,11 +1560,12 @@ def inject_styles() -> None:
           text-align: center;
           padding: 2.6rem 2rem;
           border-radius: 32px;
-          border: 1px solid rgba(30, 64, 175, 0.4);
+          border: 1px solid rgba(249, 115, 22, 0.16);
           background:
-            radial-gradient(circle at top, rgba(30, 64, 175, 0.24), transparent 42%),
-            rgba(8, 15, 32, 0.84);
-          box-shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+            linear-gradient(135deg, rgba(8, 13, 21, 0.7), rgba(16, 24, 36, 0.52)),
+            radial-gradient(circle at top, rgba(249, 115, 22, 0.14), transparent 42%);
+          box-shadow: 0 24px 60px rgba(0, 0, 0, 0.26);
+          backdrop-filter: blur(20px);
         }
         .landing-title {
           font-size: clamp(2.5rem, 6vw, 5.4rem);
@@ -1361,36 +1578,38 @@ def inject_styles() -> None:
         .landing-description {
           max-width: 680px;
           margin: 0 auto;
-          color: #b7c6dc;
+          color: var(--ls-text-soft);
           font-size: 1.08rem;
           line-height: 1.7;
         }
         .choice-card {
           min-height: 150px;
           border-radius: 24px;
-          border: 1px solid rgba(30, 64, 175, 0.34);
-          background: rgba(15, 23, 42, 0.82);
+          border: 1px solid var(--ls-border);
+          background: linear-gradient(180deg, rgba(10, 16, 26, 0.74), rgba(18, 27, 39, 0.56));
           padding: 1.25rem;
           margin-top: 1rem;
+          backdrop-filter: blur(16px);
         }
         .choice-title {
           font-size: 1.35rem;
           font-weight: 800;
-          color: #f8fbff;
+          color: var(--ls-text);
           margin-bottom: 0.45rem;
         }
         .contact-bar {
           margin-top: 1.8rem;
           padding: 1.7rem 1.4rem;
           border-radius: 26px;
-          border: 1px solid rgba(30, 64, 175, 0.38);
-          background: rgba(2, 6, 23, 0.72);
+          border: 1px solid var(--ls-border);
+          background: linear-gradient(180deg, rgba(10, 16, 26, 0.74), rgba(18, 27, 39, 0.58));
           text-align: left;
-          color: #b7c6dc;
+          color: var(--ls-text-soft);
           font-size: 1.02rem;
+          backdrop-filter: blur(16px);
         }
         .contact-bar strong {
-          color: #f8fbff;
+          color: var(--ls-text);
         }
         .contact-title {
           display: block;
@@ -1411,7 +1630,7 @@ def inject_styles() -> None:
           max-width: 980px;
           padding-top: 0.75rem;
           border-top: 1px solid rgba(96, 165, 250, 0.12);
-          color: #89a4c7;
+          color: #8f9daf;
           font-size: 0.78rem;
           line-height: 1.65;
         }
@@ -1420,7 +1639,7 @@ def inject_styles() -> None:
         }
         .policy-footer summary {
           list-style: none;
-          color: #9fb6d9;
+          color: #b5bfcf;
           font-size: 0.76rem;
           letter-spacing: 0.04em;
           text-transform: uppercase;
@@ -1430,17 +1649,17 @@ def inject_styles() -> None:
         }
         .policy-copy {
           margin-top: 0.7rem;
-          color: #7e97b8;
+          color: #94a1b1;
         }
         .policy-link {
           display: inline-block;
           margin-top: 0.45rem;
-          color: #93c5fd;
+          color: #f59e0b;
           text-decoration: none;
           font-size: 0.78rem;
         }
         .policy-link:hover {
-          color: #bfdbfe;
+          color: #fdba74;
           text-decoration: underline;
         }
         .auth-action-bar {
@@ -1459,26 +1678,65 @@ def inject_styles() -> None:
           box-shadow: none;
         }
         .auth-state {
-          color: #b7c6dc;
+          color: var(--ls-text-soft);
           line-height: 1.6;
           margin-bottom: 0.75rem;
         }
+        .stButton > button {
+          border-radius: 14px !important;
+          border: 1px solid rgba(163, 176, 194, 0.18) !important;
+          background: linear-gradient(135deg, rgba(15, 23, 35, 0.92), rgba(23, 33, 47, 0.92)) !important;
+          color: var(--ls-text) !important;
+          box-shadow: none !important;
+          white-space: nowrap !important;
+          min-height: 44px !important;
+          padding-left: 0.95rem !important;
+          padding-right: 0.95rem !important;
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          text-align: center !important;
+          line-height: 1.1 !important;
+        }
+        .stButton > button:hover {
+          border-color: rgba(249, 115, 22, 0.34) !important;
+          background: linear-gradient(135deg, rgba(18, 28, 41, 0.96), rgba(29, 41, 56, 0.96)) !important;
+        }
+        button[data-testid="stBaseButton-primary"] {
+          background: linear-gradient(135deg, rgba(249, 115, 22, 0.18), rgba(234, 88, 12, 0.24)) !important;
+          border-color: rgba(249, 115, 22, 0.24) !important;
+          color: #fff7ed !important;
+          box-shadow: 0 10px 26px rgba(249, 115, 22, 0.12) !important;
+        }
+        button[data-testid="stBaseButton-primary"]:hover {
+          background: linear-gradient(135deg, rgba(251, 146, 60, 0.26), rgba(249, 115, 22, 0.3)) !important;
+          border-color: rgba(251, 146, 60, 0.34) !important;
+        }
         .st-key-landing_company_choice button {
-          background: linear-gradient(135deg, #1e3a8a, #1d4ed8) !important;
-          border: 1px solid rgba(59, 130, 246, 0.5) !important;
-          color: #f8fbff !important;
-          box-shadow: 0 12px 32px rgba(30, 64, 175, 0.28) !important;
+          background: linear-gradient(135deg, rgba(249, 115, 22, 0.18), rgba(234, 88, 12, 0.24)) !important;
+          border: 1px solid rgba(249, 115, 22, 0.24) !important;
+          color: #fff7ed !important;
+          box-shadow: 0 10px 26px rgba(249, 115, 22, 0.12) !important;
         }
         .st-key-landing_company_choice button:hover {
-          background: linear-gradient(135deg, #1d4ed8, #2563eb) !important;
-          border-color: rgba(59, 130, 246, 0.72) !important;
+          background: linear-gradient(135deg, rgba(251, 146, 60, 0.26), rgba(249, 115, 22, 0.3)) !important;
+          border-color: rgba(251, 146, 60, 0.34) !important;
+        }
+        .st-key-topbar-landing-login button,
+        .st-key-topbar-landing-login-open button,
+        .st-key-topbar-landing-close-auth button {
+          width: 100% !important;
+          min-width: 0 !important;
+        }
+        .st-key-topbar-landing-close-auth button {
+          min-width: 0 !important;
         }
         .eyebrow {
           display: inline-block;
           padding: 0.4rem 0.75rem;
           border-radius: 999px;
-          background: rgba(30, 58, 138, 0.62);
-          color: #f8fbff;
+          background: rgba(249, 115, 22, 0.14);
+          color: #ffedd5;
           font-size: 0.8rem;
           font-weight: 700;
           letter-spacing: 0.04em;
@@ -1487,7 +1745,7 @@ def inject_styles() -> None:
         .section-title {
           font-size: 1.55rem;
           font-weight: 800;
-          color: #f8fbff;
+          color: var(--ls-text);
           margin: 0.7rem 0 0.45rem;
         }
         .metric-card {
@@ -1498,13 +1756,13 @@ def inject_styles() -> None:
           min-height: 58px;
         }
         .metric-label {
-          color: #9db2d1;
+          color: var(--ls-text-soft);
           font-size: 0.92rem;
         }
         .metric-value {
           font-size: 1.55rem;
           font-weight: 800;
-          color: #3b82f6;
+          color: var(--ls-accent);
           margin-top: 0.25rem;
         }
         .map-selection-card {
@@ -1516,36 +1774,37 @@ def inject_styles() -> None:
           display: inline-block;
           padding: 0.35rem 0.7rem;
           border-radius: 999px;
-          background: rgba(30, 58, 138, 0.62);
-          color: #f8fbff;
+          background: var(--ls-steel-soft);
+          color: var(--ls-text);
           font-size: 0.82rem;
           font-weight: 700;
         }
         .status-pill.ai {
-          background: rgba(29, 78, 216, 0.36);
-          color: #e5f2ff;
+          background: var(--ls-accent-soft);
+          color: #fff7ed;
         }
         .notice {
           border-radius: 18px;
           padding: 0.95rem 1rem;
           margin-top: 0.75rem;
-          border: 1px solid rgba(30, 64, 175, 0.34);
+          border: 1px solid var(--ls-border);
+          backdrop-filter: blur(14px);
         }
         .notice strong {
           display: block;
           margin-bottom: 0.35rem;
         }
         .notice-info {
-          background: rgba(30, 58, 138, 0.42);
-          color: #f8fbff;
+          background: rgba(53, 93, 122, 0.28);
+          color: var(--ls-text);
         }
         .notice-success {
           background: rgba(34, 197, 94, 0.14);
-          color: #86efac;
+          color: #bef264;
         }
         .notice-warning {
-          background: rgba(245, 158, 11, 0.16);
-          color: #fcd34d;
+          background: rgba(249, 115, 22, 0.14);
+          color: #fdba74;
         }
         .notice-error {
           background: rgba(239, 68, 68, 0.16);
@@ -1555,14 +1814,14 @@ def inject_styles() -> None:
           display: inline-block;
           padding: 0.55rem 0.9rem;
           border-radius: 999px;
-          background: rgba(2, 6, 23, 0.72);
-          border: 1px solid rgba(30, 64, 175, 0.34);
-          color: #dbeafe;
+          background: rgba(10, 16, 26, 0.72);
+          border: 1px solid var(--ls-border);
+          color: #e7edf5;
           font-weight: 700;
           margin: 0.45rem 0 0.8rem;
         }
         .small-copy {
-          color: #b7c6dc;
+          color: var(--ls-text-soft);
           line-height: 1.6;
           font-size: 0.96rem;
         }
@@ -1576,12 +1835,12 @@ def inject_styles() -> None:
           margin-bottom: 0.35rem;
         }
         .score-local {
-          background: rgba(30, 58, 138, 0.62);
-          color: #f8fbff;
+          background: var(--ls-steel-soft);
+          color: var(--ls-text);
         }
         .score-ai {
-          background: rgba(29, 78, 216, 0.36);
-          color: #e5f2ff;
+          background: var(--ls-accent-soft);
+          color: #fff7ed;
         }
         .rating-summary {
           display: flex;
@@ -1589,7 +1848,7 @@ def inject_styles() -> None:
           gap: 0.55rem;
           flex-wrap: wrap;
           margin: 0.35rem 0 0.75rem;
-          color: #dbeafe;
+          color: #e7edf5;
           font-size: 0.95rem;
         }
         .rating-stars {
@@ -1605,31 +1864,48 @@ def inject_styles() -> None:
           padding: 0.7rem 0;
         }
         .review-meta {
-          color: #8ea6c7;
+          color: #9aa8b8;
           font-size: 0.84rem;
           margin-top: 0.15rem;
         }
         .helper-list {
           margin-top: 0.5rem;
           line-height: 1.7;
-          color: #b7c6dc;
+          color: var(--ls-text-soft);
         }
         .streamlit-expanderHeader {
           font-weight: 700;
+        }
+        div[data-testid="stExpander"] {
+          border: 1px solid var(--ls-border);
+          border-radius: 18px;
+          background: linear-gradient(180deg, rgba(10, 16, 26, 0.42), rgba(15, 23, 35, 0.28));
+          margin-bottom: 0.45rem;
+        }
+        div[data-testid="stExpander"] details {
+          background: transparent;
         }
         div[data-testid="stTextInput"] input,
         div[data-testid="stTextArea"] textarea,
         div[data-testid="stNumberInput"] input,
         div[data-testid="stDateInput"] input {
-          background-color: rgba(2, 6, 23, 0.86);
-          color: #e5f2ff;
-          border: 1px solid rgba(30, 64, 175, 0.42);
+          background-color: rgba(9, 14, 23, 0.82);
+          color: var(--ls-text);
+          border: 1px solid rgba(163, 176, 194, 0.18);
+        }
+        div[data-testid="stMultiSelect"] > div,
+        div[data-testid="stSelectbox"] > div,
+        div[data-testid="stSlider"] > div {
+          background: rgba(10, 16, 26, 0.26);
+          border-radius: 16px;
         }
         label, .stMarkdown, .stCaption, .stExpander {
-          color: #e5f2ff;
+          color: var(--ls-text);
         }
         </style>
-        """,
+        """.replace("__BACKGROUND_ART__", background_art)
+    st.markdown(
+        css,
         unsafe_allow_html=True,
     )
 
@@ -1666,10 +1942,11 @@ def init_state() -> None:
         "carrier_profile": empty_carrier_profile(),
         "announcements": [],
         "filters": {
-            "pickupCity": "",
-            "deliveryCity": "",
-            "cargoType": "",
-            "equipment": "",
+            "deliveryCity": [],
+            "deliveryDate": [],
+            "companyName": [],
+            "priceMin": 0,
+            "priceMax": 0,
         },
         "draft_announcement": create_empty_draft(),
         "company_ai": {
@@ -1683,10 +1960,11 @@ def init_state() -> None:
             "assistantMessage": "",
             "matches": [],
             "suggestedFilters": {
-                "pickupCity": "",
-                "deliveryCity": "",
-                "cargoType": "",
-                "equipment": "",
+                "deliveryCity": [],
+                "deliveryDate": [],
+                "companyName": [],
+                "priceMin": 0,
+                "priceMax": 0,
             },
             "error": "",
         },
@@ -1759,12 +2037,60 @@ def ensure_state_shape() -> None:
     if "budget" not in draft:
         draft["budget"] = 0
 
+    filters = st.session_state.filters
+    if "deliveryCity" not in filters:
+        filters["deliveryCity"] = []
+    else:
+        filters["deliveryCity"] = normalize_filter_choices(filters.get("deliveryCity"))
+    if "deliveryDate" not in filters:
+        filters["deliveryDate"] = []
+    else:
+        filters["deliveryDate"] = normalize_filter_choices(filters.get("deliveryDate"))
+    if "companyName" not in filters:
+        filters["companyName"] = []
+    else:
+        filters["companyName"] = normalize_filter_choices(filters.get("companyName"))
+    if "priceMin" not in filters:
+        filters["priceMin"] = 0
+    if "priceMax" not in filters:
+        filters["priceMax"] = 0
+
+    carrier_ai_filters = st.session_state.carrier_ai["suggestedFilters"]
+    if "deliveryCity" not in carrier_ai_filters:
+        carrier_ai_filters["deliveryCity"] = []
+    else:
+        carrier_ai_filters["deliveryCity"] = normalize_filter_choices(
+            carrier_ai_filters.get("deliveryCity")
+        )
+    if "deliveryDate" not in carrier_ai_filters:
+        carrier_ai_filters["deliveryDate"] = []
+    else:
+        carrier_ai_filters["deliveryDate"] = normalize_filter_choices(
+            carrier_ai_filters.get("deliveryDate")
+        )
+    if "companyName" not in carrier_ai_filters:
+        carrier_ai_filters["companyName"] = []
+    else:
+        carrier_ai_filters["companyName"] = normalize_filter_choices(
+            carrier_ai_filters.get("companyName")
+        )
+    if "priceMin" not in carrier_ai_filters:
+        carrier_ai_filters["priceMin"] = 0
+    if "priceMax" not in carrier_ai_filters:
+        carrier_ai_filters["priceMax"] = 0
+
 
 def sync_widget_keys_from_state() -> None:
     company = st.session_state.company_profile
     carrier = st.session_state.carrier_profile
     draft = st.session_state.draft_announcement
     filters = st.session_state.filters
+    available_price_min, available_price_max = get_available_price_bounds()
+    stored_price_min = int(filters.get("priceMin") or 0)
+    stored_price_max = int(filters.get("priceMax") or 0)
+    initial_price_range = get_clamped_price_range(
+        stored_price_min, stored_price_max, available_price_min, available_price_max
+    )
 
     widget_defaults = {
         "company_legalName": company["legalName"],
@@ -1799,10 +2125,10 @@ def sync_widget_keys_from_state() -> None:
         "announcement_tripsTotal": int(draft["tripsTotal"] or 1),
         "announcement_budget": int(draft["budget"] or 0),
         "announcement_notes": draft["notes"],
-        "filter_pickupCity": filters["pickupCity"],
-        "filter_deliveryCity": filters["deliveryCity"],
-        "filter_cargoType": filters["cargoType"],
-        "filter_equipment": filters["equipment"],
+        "filter_deliveryCity": normalize_filter_choices(filters["deliveryCity"]),
+        "filter_deliveryDate": normalize_filter_choices(filters["deliveryDate"]),
+        "filter_companyName": normalize_filter_choices(filters["companyName"]),
+        "filter_priceRange": initial_price_range,
     }
 
     cargo_selection = draft["cargoType"] or ""
@@ -2522,6 +2848,56 @@ def process_service_request_decision(
     return True, "Le transporteur a ete refuse."
 
 
+def cancel_carrier_service_request(request_id: str) -> tuple[bool, str]:
+    service_request = next(
+        (item for item in st.session_state.service_requests if item["id"] == request_id),
+        None,
+    )
+    if not service_request:
+        return False, "Proposition introuvable."
+    if normalize_text(service_request.get("status")) != "pending":
+        return False, "Seules les propositions en attente peuvent etre annulees."
+
+    current_account = st.session_state.current_account or {}
+    current_account_id = normalize_text(current_account.get("id"))
+    current_carrier_name = normalize_text(st.session_state.carrier_profile.get("transportCompany"))
+    request_account_id = normalize_text(service_request.get("carrierAccountId"))
+    request_carrier_name = normalize_text(service_request.get("carrierName"))
+    if current_account_id:
+        if request_account_id and request_account_id != current_account_id:
+            return False, "Cette proposition ne vous appartient pas."
+    elif request_carrier_name != current_carrier_name:
+        return False, "Cette proposition ne vous appartient pas."
+
+    announcement = find_announcement(service_request["announcementId"])
+    announcement_title = (
+        announcement["title"] if announcement else service_request.get("announcementTitle", "cette annonce")
+    )
+    company_name = (
+        announcement["companyName"] if announcement else service_request.get("companyName", "l'entreprise")
+    )
+
+    update_service_request_record(
+        request_id,
+        status="cancelled",
+        decisionMessage="Proposition annulée par le transporteur.",
+    )
+    add_notification(
+        recipient_role="company",
+        recipient_name=service_request["companyName"],
+        recipient_account_id=service_request.get("companyAccountId", ""),
+        title="Proposition annulee par le transporteur",
+        message=(
+            f"{service_request['carrierName']} a annule sa proposition pour "
+            f"{announcement_title}."
+        ),
+        related_announcement_id=service_request.get("announcementId", ""),
+        related_request_id=request_id,
+    )
+    load_persisted_data_into_session()
+    return True, f"Votre proposition pour {company_name} a ete annulee."
+
+
 def geocode_location(location_text: str) -> tuple[float, float] | None:
     query = normalize_text(location_text)
     if not query:
@@ -2799,6 +3175,79 @@ def clamp_score(value: Any) -> int:
         return 0
 
 
+def round_price_down(value: int) -> int:
+    value = max(0, int(value or 0))
+    return (value // PRICE_FILTER_STEP) * PRICE_FILTER_STEP
+
+
+def round_price_up(value: int) -> int:
+    value = max(0, int(value or 0))
+    if value == 0:
+        return 0
+    return ((value + PRICE_FILTER_STEP - 1) // PRICE_FILTER_STEP) * PRICE_FILTER_STEP
+
+
+def normalize_filter_choices(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [text for item in value if (text := normalize_text(item))]
+    if isinstance(value, str):
+        text = normalize_text(value)
+        return [text] if text else []
+    return []
+
+
+def get_clamped_price_range(
+    stored_price_min: int, stored_price_max: int, available_price_min: int, available_price_max: int
+) -> tuple[int, int]:
+    if stored_price_min == 0 and stored_price_max == 0:
+        return available_price_min, available_price_max
+
+    clamped_min = max(available_price_min, round_price_down(stored_price_min))
+    clamped_max = stored_price_max or available_price_max
+    clamped_max = round_price_up(clamped_max)
+    clamped_max = min(available_price_max, max(clamped_min, clamped_max))
+    return clamped_min, clamped_max
+
+
+def get_available_price_bounds() -> tuple[int, int]:
+    prices = [int(get_price_per_trip(item) or 0) for item in get_active_announcements()]
+    if not prices:
+        return PRICE_FILTER_DEFAULT_MIN, PRICE_FILTER_DEFAULT_MAX
+
+    minimum = PRICE_FILTER_DEFAULT_MIN
+    maximum = round_price_up(max(PRICE_FILTER_DEFAULT_MAX, max(prices)))
+    if minimum == maximum:
+        maximum = minimum + max(PRICE_FILTER_STEP, 500 if minimum > 0 else 1000)
+    return minimum, maximum
+
+
+def get_delivery_filter_options() -> list[str]:
+    values = {
+        normalize_text(format_date(get_delivery_date(announcement)))
+        for announcement in get_active_announcements()
+        if normalize_date_value(get_delivery_date(announcement))
+    }
+    return sorted(values)
+
+
+def get_delivery_city_filter_options() -> list[str]:
+    values = {
+        normalize_text(announcement["deliveryCity"])
+        for announcement in get_active_announcements()
+        if normalize_text(announcement["deliveryCity"])
+    }
+    return sorted(values, key=normalize_for_match)
+
+
+def get_company_filter_options() -> list[str]:
+    values = {
+        normalize_text(announcement["companyName"])
+        for announcement in get_active_announcements()
+        if normalize_text(announcement["companyName"])
+    }
+    return sorted(values, key=normalize_for_match)
+
+
 def clamp_rating_score(value: Any) -> int:
     try:
         return max(1, min(5, int(float(value))))
@@ -3066,10 +3515,11 @@ def get_filtered_announcements() -> list[dict[str, Any]]:
     for announcement in get_active_announcements():
         if not announcement_matches_filter_values(
             announcement,
-            pickup_city=filters["pickupCity"],
-            delivery_city=filters["deliveryCity"],
-            cargo_type=filters["cargoType"],
-            equipment=filters["equipment"],
+            delivery_city=normalize_filter_choices(filters.get("deliveryCity")),
+            delivery_date=normalize_filter_choices(filters.get("deliveryDate")),
+            company_name=normalize_filter_choices(filters.get("companyName")),
+            price_min=int(filters.get("priceMin") or 0),
+            price_max=int(filters.get("priceMax") or 0),
         ):
             continue
         results.append(announcement)
@@ -3079,37 +3529,50 @@ def get_filtered_announcements() -> list[dict[str, Any]]:
 def announcement_matches_filter_values(
     announcement: dict[str, Any],
     *,
-    pickup_city: str = "",
-    delivery_city: str = "",
-    cargo_type: str = "",
-    equipment: str = "",
+    delivery_city: str | list[str] = "",
+    delivery_date: str | list[str] = "",
+    company_name: str | list[str] = "",
+    price_min: int = 0,
+    price_max: int = 0,
 ) -> bool:
-    if pickup_city and normalize_for_match(pickup_city) not in normalize_for_match(
-        announcement["pickupCity"]
-    ):
-        return False
-    if delivery_city and normalize_for_match(delivery_city) not in normalize_for_match(
-        announcement["deliveryCity"]
-    ):
-        return False
-    if cargo_type and normalize_for_match(cargo_type) not in normalize_for_match(
-        announcement["cargoType"]
-    ):
-        return False
-    if equipment and normalize_equipment_for_match(equipment) != normalize_equipment_for_match(
-        announcement["equipment"]
-    ):
-        return False
+    selected_delivery_cities = normalize_filter_choices(delivery_city)
+    if selected_delivery_cities:
+        normalized_delivery_city = normalize_for_match(announcement["deliveryCity"])
+        if not any(
+            normalize_for_match(city) in normalized_delivery_city for city in selected_delivery_cities
+        ):
+            return False
+    selected_delivery_dates = normalize_filter_choices(delivery_date)
+    if selected_delivery_dates:
+        announcement_date = normalize_date_value(get_delivery_date(announcement))
+        normalized_dates = {
+            normalized
+            for item in selected_delivery_dates
+            if (normalized := normalize_date_value(item))
+        }
+        if not normalized_dates or not announcement_date or announcement_date not in normalized_dates:
+            return False
+    selected_company_names = normalize_filter_choices(company_name)
+    if selected_company_names:
+        normalized_company_name = normalize_for_match(announcement["companyName"])
+        if not any(
+            normalize_for_match(name) in normalized_company_name for name in selected_company_names
+        ):
+            return False
+    announcement_price = int(get_price_per_trip(announcement) or 0)
+    has_price_filter = price_min > 0 or price_max > 0
+    if has_price_filter:
+        if announcement_price < int(price_min):
+            return False
+        if int(price_max) > 0 and announcement_price > int(price_max):
+            return False
     return True
 
 
 def alert_matches_announcement(alert: dict[str, Any], announcement: dict[str, Any]) -> bool:
     return announcement_matches_filter_values(
         announcement,
-        pickup_city=alert.get("pickupCity", ""),
         delivery_city=alert.get("deliveryCity", ""),
-        cargo_type=alert.get("cargoType", ""),
-        equipment=alert.get("equipment", ""),
     )
 
 
@@ -3546,7 +4009,7 @@ def carrier_assistant() -> None:
             "Explique simplement ce que tu cherches",
             key="carrier_ai_prompt",
             height=150,
-            placeholder="Exemple: Je veux surtout des voyages flatbed ou drybox entre Montreal, Quebec et Ottawa.",
+            placeholder="Exemple: Je veux surtout des voyages autour de 1800 CAD, avec livraison a Toronto, pour des entreprises forestieres.",
         )
         action_col1, action_col2 = st.columns([1.3, 1])
         with action_col1:
@@ -3615,10 +4078,11 @@ def build_carrier_prompt(request_text: str) -> str:
     template = {
         "assistantMessage": "",
         "suggestedFilters": {
-            "pickupCity": "",
-            "deliveryCity": "",
-            "cargoType": "",
-            "equipment": "",
+            "deliveryCity": [],
+            "deliveryDate": [],
+            "companyName": [],
+            "priceMin": 0,
+            "priceMax": 0,
         },
         "matches": [
             {
@@ -3637,7 +4101,11 @@ def build_carrier_prompt(request_text: str) -> str:
         + "- Matches: maximum 5.\n"
         + "- score: nombre entier de 0 a 100.\n"
         + "- announcementId doit correspondre exactement a une annonce fournie.\n"
-        + "- reasoning doit etre bref et concret."
+        + "- reasoning doit etre bref et concret.\n"
+        + "- suggestedFilters doit seulement utiliser: deliveryCity, deliveryDate, companyName, priceMin, priceMax.\n"
+        + "- deliveryCity, deliveryDate et companyName doivent etre des tableaux de valeurs quand tu proposes plusieurs choix.\n"
+        + "- deliveryDate doit etre au format YYYY-MM-DD si elle est connue.\n"
+        + "- priceMin et priceMax sont des nombres en CAD par voyage."
     )
 
 
@@ -3660,26 +4128,36 @@ def apply_carrier_ai_response(payload: dict[str, Any]) -> None:
     ) or "Les annonces les plus compatibles ont ete classees."
     st.session_state.carrier_ai["matches"] = matches
     st.session_state.carrier_ai["suggestedFilters"] = {
-        "pickupCity": normalize_text(suggested.get("pickupCity")),
-        "deliveryCity": normalize_text(suggested.get("deliveryCity")),
-        "cargoType": normalize_text(suggested.get("cargoType")),
-        "equipment": normalize_equipment_option(suggested.get("equipment")),
+        "deliveryCity": normalize_filter_choices(suggested.get("deliveryCity")),
+        "deliveryDate": normalize_filter_choices(suggested.get("deliveryDate")),
+        "companyName": normalize_filter_choices(suggested.get("companyName")),
+        "priceMin": max(0, int(float(suggested.get("priceMin") or 0))),
+        "priceMax": max(0, int(float(suggested.get("priceMax") or 0))),
     }
     st.session_state.carrier_ai["error"] = ""
 
 
 def render_suggested_filters() -> dict[str, str]:
-    labels = {
-        "pickupCity": "Chargement",
-        "deliveryCity": "Livraison",
-        "cargoType": "Marchandise",
-        "equipment": "Equipement",
-    }
-    return {
-        labels[key]: value
-        for key, value in st.session_state.carrier_ai["suggestedFilters"].items()
-        if normalize_text(value)
-    }
+    suggested = st.session_state.carrier_ai["suggestedFilters"]
+    rendered: dict[str, str] = {}
+    delivery_cities = normalize_filter_choices(suggested.get("deliveryCity"))
+    if delivery_cities:
+        rendered["Livraison"] = ", ".join(delivery_cities)
+    delivery_dates = normalize_filter_choices(suggested.get("deliveryDate"))
+    if delivery_dates:
+        rendered["Date de livraison"] = ", ".join(delivery_dates)
+    company_names = normalize_filter_choices(suggested.get("companyName"))
+    if company_names:
+        rendered["Entreprise"] = ", ".join(company_names)
+    if int(suggested.get("priceMin") or 0) > 0 or int(suggested.get("priceMax") or 0) > 0:
+        price_min = int(suggested.get("priceMin") or 0)
+        price_max = int(suggested.get("priceMax") or 0)
+        rendered["Prix"] = (
+            f"{format_currency(price_min)} a {format_currency(price_max)}"
+            if price_max > 0
+            else f"A partir de {format_currency(price_min)}"
+        )
+    return rendered
 
 
 def export_current_draft() -> dict[str, Any]:
@@ -3730,10 +4208,15 @@ def apply_draft_to_widgets() -> None:
 
 def apply_filters_to_widgets() -> None:
     filters = st.session_state.filters
-    st.session_state.filter_pickupCity = filters["pickupCity"]
-    st.session_state.filter_deliveryCity = filters["deliveryCity"]
-    st.session_state.filter_cargoType = filters["cargoType"]
-    st.session_state.filter_equipment = filters["equipment"]
+    available_price_min, available_price_max = get_available_price_bounds()
+    st.session_state.filter_deliveryCity = normalize_filter_choices(filters["deliveryCity"])
+    st.session_state.filter_deliveryDate = normalize_filter_choices(filters["deliveryDate"])
+    st.session_state.filter_companyName = normalize_filter_choices(filters["companyName"])
+    stored_price_min = int(filters.get("priceMin") or 0)
+    stored_price_max = int(filters.get("priceMax") or 0)
+    st.session_state.filter_priceRange = get_clamped_price_range(
+        stored_price_min, stored_price_max, available_price_min, available_price_max
+    )
 
 
 def get_company_announcement_status(announcement: dict[str, Any]) -> str:
@@ -3742,6 +4225,23 @@ def get_company_announcement_status(announcement: dict[str, Any]) -> str:
     if int(announcement["remainingTrips"]) > 0:
         return "Active"
     return "Completee"
+
+
+def format_service_request_status(status: str) -> str:
+    normalized = normalize_text(status)
+    if normalized == "pending":
+        return "En attente"
+    if normalized == "accepted":
+        return "Acceptée"
+    if normalized == "refused":
+        return "Refusée"
+    if normalized == "cancelled":
+        return "Annulée"
+    return normalized or "Info"
+
+
+def get_service_request_status_class(status: str) -> str:
+    return "status-pill" if normalize_text(status) == "pending" else "status-pill ai"
 
 
 def infer_notification_state(notification: dict[str, Any]) -> str:
@@ -3805,7 +4305,8 @@ def render_company_requests_panel() -> None:
     for service_request in requests_list:
         announcement = find_announcement(service_request["announcementId"])
         remaining_trips = announcement["remainingTrips"] if announcement else 0
-        status_class = "status-pill" if service_request["status"] == "pending" else "status-pill ai"
+        status_class = get_service_request_status_class(service_request["status"])
+        status_label = format_service_request_status(service_request["status"])
         carrier_rating_summary = get_public_rating_summary(
             service_request.get("carrierAccountId", "")
         )
@@ -3824,7 +4325,7 @@ def render_company_requests_panel() -> None:
                     Message: {service_request['message'] or 'Aucun message.'}
                   </div>
                 </div>
-                <div class="{status_class}">{service_request['status']}</div>
+                <div class="{status_class}">{status_label}</div>
               </div>
             </div>
             """,
@@ -3930,61 +4431,148 @@ def render_company_requests_panel() -> None:
 
 
 def render_carrier_requests_panel() -> None:
-    requests_list = get_carrier_service_requests()
+    requests_list = [
+        request
+        for request in get_carrier_service_requests()
+        if normalize_text(request.get("status")) == "pending"
+    ]
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
     st.markdown("<span class='eyebrow'>Mes propositions</span>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Suivi des demandes envoyees</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Propositions en attente</div>", unsafe_allow_html=True)
 
     if not requests_list:
         show_notice(
             "info",
-            "Aucune proposition envoyee",
-            "Propose ton service sur une annonce pour recevoir ensuite la decision de l'entreprise.",
+            "Aucune proposition en attente",
+            "Tes offres en attente apparaitront ici jusqu'a la decision de l'entreprise.",
         )
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
     for service_request in requests_list:
-        status_class = "status-pill" if service_request["status"] == "pending" else "status-pill ai"
+        status_label = format_service_request_status(service_request["status"])
         company_rating_summary = get_public_rating_summary(
             service_request.get("companyAccountId", "")
         )
-        st.markdown(
-            f"""
-            <div class="result-card">
-              <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;">
-                <div>
-                  <div class="section-title" style="font-size:1.1rem;margin-top:0;">{service_request['announcementTitle']}</div>
-                  <div class="small-copy">
-                    Entreprise: <strong>{service_request['companyName']}</strong><br>
-                    Note publique: <strong>{company_rating_summary['label']}</strong><br>
-                    Voyages demandes: <strong>{service_request['requestedTrips']}</strong><br>
-                    Message envoye: {service_request['message'] or 'Aucun message.'}<br>
-                    Reponse: {service_request['decisionMessage'] or 'En attente de decision.'}
-                  </div>
-                </div>
-                <div class="{status_class}">{service_request['status']}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        expander_label = (
+            f"{service_request['announcementTitle']} | {status_label} | {service_request['companyName']}"
         )
+        with st.expander(expander_label, expanded=False):
+            info_col1, info_col2 = st.columns(2)
+            with info_col1:
+                st.caption("Entreprise")
+                st.write(service_request["companyName"] or "Non renseignee")
+                st.caption("Voyages demandes")
+                st.write(service_request["requestedTrips"] or 1)
+                st.caption("Date d'envoi")
+                st.write(service_request["createdAt"] or "Non precisee")
+            with info_col2:
+                st.caption("Etat")
+                st.markdown(
+                    f"<div class='{get_service_request_status_class(service_request['status'])}'>{status_label}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Note publique")
+                st.write(company_rating_summary["label"])
+                st.caption("Reponse")
+                st.write(service_request["decisionMessage"] or "En attente de decision.")
 
-        with st.expander(f"Voir les evaluations publiques de {service_request['companyName']}", expanded=False):
+            st.caption("Message envoye")
+            st.write(service_request["message"] or "Aucun message.")
+
+            st.caption("Evaluation publique de l'entreprise")
             render_public_rating_summary(
                 service_request.get("companyAccountId", ""),
                 empty_message="Aucune evaluation publique pour cette entreprise pour le moment.",
             )
+            st.caption("Commentaires publics recents")
             render_public_reviews(
                 service_request.get("companyAccountId", ""),
                 empty_message="Aucun commentaire public pour cette entreprise.",
                 limit=3,
             )
 
-        with st.expander(f"Messagerie - {service_request['companyName']}", expanded=False):
+            st.caption("Messagerie")
             render_request_messages(service_request)
 
-        if normalize_text(service_request["status"]) in RATABLE_REQUEST_STATUSES:
+            if st.button(
+                "Annuler ma proposition",
+                key=f"cancel-proposal-{service_request['id']}",
+                use_container_width=True,
+            ):
+                ok, message = cancel_carrier_service_request(service_request["id"])
+                if ok:
+                    st.success(message)
+                    st.rerun()
+                st.error(message)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_carrier_contracts_panel() -> None:
+    contracts_list = [
+        request
+        for request in get_carrier_service_requests()
+        if normalize_text(request.get("status")) == "accepted"
+    ]
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+    st.markdown("<span class='eyebrow'>Mes contrats</span>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Contrats acceptes</div>", unsafe_allow_html=True)
+
+    if not contracts_list:
+        show_notice(
+            "info",
+            "Aucun contrat pour le moment",
+            "Les propositions acceptees par les entreprises apparaitront ici.",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    for service_request in contracts_list:
+        status_label = format_service_request_status(service_request["status"])
+        company_rating_summary = get_public_rating_summary(
+            service_request.get("companyAccountId", "")
+        )
+        expander_label = (
+            f"{service_request['announcementTitle']} | {status_label} | {service_request['companyName']}"
+        )
+        with st.expander(expander_label, expanded=False):
+            info_col1, info_col2 = st.columns(2)
+            with info_col1:
+                st.caption("Entreprise")
+                st.write(service_request["companyName"] or "Non renseignee")
+                st.caption("Voyages attribues")
+                st.write(service_request["requestedTrips"] or 1)
+                st.caption("Date d'acceptation")
+                st.write(service_request["updatedAt"] or service_request["createdAt"] or "Non precisee")
+            with info_col2:
+                st.caption("Etat")
+                st.markdown(
+                    f"<div class='{get_service_request_status_class(service_request['status'])}'>{status_label}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("Note publique")
+                st.write(company_rating_summary["label"])
+                st.caption("Decision")
+                st.write(service_request["decisionMessage"] or "Contrat accepte.")
+
+            st.caption("Message envoye")
+            st.write(service_request["message"] or "Aucun message.")
+
+            st.caption("Evaluation publique de l'entreprise")
+            render_public_rating_summary(
+                service_request.get("companyAccountId", ""),
+                empty_message="Aucune evaluation publique pour cette entreprise pour le moment.",
+            )
+            st.caption("Commentaires publics recents")
+            render_public_reviews(
+                service_request.get("companyAccountId", ""),
+                empty_message="Aucun commentaire public pour cette entreprise.",
+                limit=3,
+            )
+            st.caption("Messagerie")
+            render_request_messages(service_request)
+
             with st.expander(
                 f"Evaluer cette entreprise - {service_request['companyName']}",
                 expanded=False,
@@ -4554,7 +5142,7 @@ def render_login_panel() -> None:
 
     action_cols = st.columns(2)
     with action_cols[0]:
-        if st.button("Créer un compte", use_container_width=True, key="login-create-account"):
+        if st.button("Pas de compte? S'inscrire", use_container_width=True, key="login-create-account"):
             st.session_state.auth_view = "signup_choice"
             st.rerun()
     with action_cols[1]:
@@ -5403,15 +5991,15 @@ def render_carrier_dashboard() -> None:
     with left_col:
         carrier_assistant()
         render_filters_panel()
-        render_alerts_panel()
 
     with right_col:
         render_notifications_panel(
             get_current_carrier_notifications(),
-            title="Alertes transporteur",
+            title="Notifications transporteur",
             empty_message="Les decisions des entreprises apparaitront ici.",
         )
         render_carrier_requests_panel()
+        render_carrier_contracts_panel()
 
     with st.expander("Resume de ma flotte", expanded=False):
         profile = st.session_state.carrier_profile
@@ -5426,41 +6014,71 @@ def render_filters_panel() -> None:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
     st.markdown("<span class='eyebrow'>Recherche</span>", unsafe_allow_html=True)
     st.markdown("<div class='section-title'>Filtrer les annonces</div>", unsafe_allow_html=True)
+    available_price_min, available_price_max = get_available_price_bounds()
+    current_price_range = st.session_state.get(
+        "filter_priceRange",
+        (available_price_min, available_price_max),
+    )
+    current_min = max(available_price_min, min(int(current_price_range[0]), available_price_max))
+    current_max = max(current_min, min(int(current_price_range[1]), available_price_max))
+    st.session_state.filter_priceRange = (current_min, current_max)
 
     filter_cols = st.columns(2)
     with filter_cols[0]:
-        st.text_input("Lieu de chargement", key="filter_pickupCity")
-        st.selectbox(
-            "Marchandise",
-            options=[""] + get_cargo_filter_options(),
-            format_func=lambda value: "Toutes" if not value else value,
-            key="filter_cargoType",
+        st.multiselect(
+            "Lieux de livraison",
+            options=get_delivery_city_filter_options(),
+            key="filter_deliveryCity",
+            placeholder="Choisir un ou plusieurs lieux",
+        )
+        st.multiselect(
+            "Date de livraison",
+            options=get_delivery_filter_options(),
+            key="filter_deliveryDate",
+            placeholder="Choisir une ou plusieurs dates",
         )
     with filter_cols[1]:
-        st.text_input("Lieu de livraison", key="filter_deliveryCity")
-        st.selectbox(
-            "Equipement requis",
-            options=[""] + EQUIPMENT_OPTIONS,
-            format_func=lambda value: "Tous" if not value else value,
-            key="filter_equipment",
+        st.multiselect(
+            "Entreprises",
+            options=get_company_filter_options(),
+            key="filter_companyName",
+            placeholder="Choisir une ou plusieurs entreprises",
+        )
+        st.slider(
+            "Prix / voyage",
+            min_value=available_price_min,
+            max_value=available_price_max,
+            step=PRICE_FILTER_STEP,
+            key="filter_priceRange",
         )
     action_cols = st.columns(2)
     with action_cols[0]:
         if st.button("Appliquer les filtres", type="primary", use_container_width=True):
+            selected_min, selected_max = st.session_state.filter_priceRange
+            store_price_min = int(selected_min)
+            store_price_max = int(selected_max)
+            if (
+                int(selected_min) == int(available_price_min)
+                and int(selected_max) == int(available_price_max)
+            ):
+                store_price_min = 0
+                store_price_max = 0
             st.session_state.filters = {
-                "pickupCity": st.session_state.filter_pickupCity,
-                "deliveryCity": st.session_state.filter_deliveryCity,
-                "cargoType": st.session_state.filter_cargoType,
-                "equipment": st.session_state.filter_equipment,
+                "deliveryCity": normalize_filter_choices(st.session_state.filter_deliveryCity),
+                "deliveryDate": normalize_filter_choices(st.session_state.filter_deliveryDate),
+                "companyName": normalize_filter_choices(st.session_state.filter_companyName),
+                "priceMin": store_price_min,
+                "priceMax": store_price_max,
             }
             st.rerun()
     with action_cols[1]:
         if st.button("Reinitialiser", use_container_width=True):
             st.session_state.filters = {
-                "pickupCity": "",
-                "deliveryCity": "",
-                "cargoType": "",
-                "equipment": "",
+                "deliveryCity": [],
+                "deliveryDate": [],
+                "companyName": [],
+                "priceMin": 0,
+                "priceMax": 0,
             }
             st.session_state.sync_filter_widgets = True
             st.rerun()
@@ -5729,105 +6347,190 @@ def render_company_announcement_card(announcement: dict[str, Any]) -> None:
 
 def render_landing_auth_actions() -> None:
     account = st.session_state.current_account
+    if not account:
+        return
     st.markdown("<div class='auth-action-bar'>", unsafe_allow_html=True)
-    if account:
-        st.markdown(
-            f"""
-            <div class="auth-state">
-              Connecte comme <strong>{account['businessName']}</strong>
-              ({get_role_label(account['role'])}).
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        action_cols = st.columns(3 if is_owner_admin_account(account) else 2)
-        with action_cols[0]:
-            if st.button("Continuer", type="primary", use_container_width=True, key="landing-continue-account"):
-                continue_as_role(account["role"])
-        with action_cols[1]:
-            if st.button("Se deconnecter", use_container_width=True, key="landing-signout-account"):
-                sign_out()
-                st.rerun()
-        if is_owner_admin_account(account):
-            with action_cols[2]:
-                if st.button("Espace admin", use_container_width=True, key="landing-admin-space"):
-                    open_admin_space()
-                    st.rerun()
-    else:
-        action_cols = st.columns(2)
-        with action_cols[0]:
-            if st.button("Connexion", use_container_width=True, key="landing-login-open"):
-                st.session_state.auth_view = "login"
-                st.session_state.auth_message = ""
-                st.rerun()
-        with action_cols[1]:
-            if st.button("S'inscrire", use_container_width=True, key="landing-signup-open"):
-                st.session_state.auth_view = "signup_choice"
-                st.session_state.auth_message = ""
+    st.markdown(
+        f"""
+        <div class="auth-state">
+          Connecte comme <strong>{account['businessName']}</strong>
+          ({get_role_label(account['role'])}).
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    action_cols = st.columns(3 if is_owner_admin_account(account) else 2)
+    with action_cols[0]:
+        if st.button("Continuer", type="primary", use_container_width=True, key="landing-continue-account"):
+            continue_as_role(account["role"])
+    with action_cols[1]:
+        if st.button("Se deconnecter", use_container_width=True, key="landing-signout-account"):
+            sign_out()
+            st.rerun()
+    if is_owner_admin_account(account):
+        with action_cols[2]:
+            if st.button("Espace admin", use_container_width=True, key="landing-admin-space"):
+                open_admin_space()
                 st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_top_bar() -> None:
+    account = st.session_state.current_account or {}
+    role = st.session_state.active_role
+
+    if role == "company":
+        current_space = "Espace entreprise"
+        space_copy = "Publiez vos voyages, recevez des propositions et attribuez-les rapidement."
+    elif role == "carrier":
+        current_space = "Espace transporteur"
+        space_copy = "Reperez les bons trajets, envoyez vos propositions et suivez vos contrats."
+    elif role == "admin":
+        current_space = "Espace admin"
+        space_copy = "Verifiez les comptes et gardez un oeil sur la qualite du reseau."
+    else:
+        current_space = "Accueil"
+        space_copy = "La plateforme logistique pour rapprocher entreprises et petits transporteurs."
+
     if st.session_state.active_role is None:
-        st.markdown(
-            f"""
-            <div class="top-shell" style="text-align:center;">
-              <div class="brand-title">{APP_NAME}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        right_ratio = 1.05 if st.session_state.auth_view != "landing" else 0.45
+        header_cols = st.columns([2.8, right_ratio], vertical_alignment="center")
+        with header_cols[0]:
+            st.markdown(
+                f"""
+                <div class="top-shell" style="display:inline-block;margin-bottom:0;max-width:640px;">
+                  <div class="brand-title">{APP_NAME}</div>
+                  <div class="brand-copy">{space_copy}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with header_cols[1]:
+            if account:
+                landing_label = "Connecte"
+                landing_value = account.get("businessName") or "Entreprise ou transporteur"
+                landing_copy = "Reprenez votre espace existant ou poursuivez vers votre tableau de bord."
+                st.markdown(
+                    f"""
+                    <div class="nav-shell">
+                      <div class="nav-label">{landing_label}</div>
+                      <div class="nav-value">{landing_value}</div>
+                      <div class="nav-copy">{landing_copy}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                if st.session_state.auth_view == "landing":
+                    login_cols = st.columns([0.22, 0.78])
+                    with login_cols[1]:
+                        if st.button(
+                            "Se connecter",
+                            type="primary",
+                            use_container_width=True,
+                            key="topbar-landing-login",
+                        ):
+                            st.session_state.auth_view = "login"
+                            st.session_state.auth_message = ""
+                            st.rerun()
+                else:
+                    action_cols = st.columns([1, 1], gap="medium")
+                    with action_cols[0]:
+                        if st.button(
+                            "Se connecter",
+                            type="primary",
+                            use_container_width=True,
+                            key="topbar-landing-login-open",
+                        ):
+                            st.session_state.auth_view = "login"
+                            st.session_state.auth_message = ""
+                            st.rerun()
+                    with action_cols[1]:
+                        if st.button(
+                            "Fermer",
+                            use_container_width=True,
+                            key="topbar-landing-close-auth",
+                        ):
+                            st.session_state.auth_view = "landing"
+                            st.session_state.auth_message = ""
+                            st.rerun()
         return
 
-    col1, col2 = st.columns([2.2, 1.2], vertical_alignment="center")
-    with col1:
+    header_cols = st.columns([1.8, 1.15, 2.05], vertical_alignment="center")
+    with header_cols[0]:
         st.markdown(
             f"""
             <div class="top-shell">
               <div class="brand-title">{APP_NAME}</div>
-              <div class="brand-copy">Marketplace logistique pour PME et petits transporteurs, avec aide a la creation d'annonces et au matching.</div>
+              <div class="brand-copy">{space_copy}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    with col2:
-        if st.session_state.active_role == "company":
-            current_space = "Espace entreprise"
-        elif st.session_state.active_role == "carrier":
-            current_space = "Espace transporteur"
+    with header_cols[1]:
+        account_value = account.get("businessName") or current_space
+        role_value = get_role_label(account.get("role")) if account.get("role") else "Administration"
+        st.markdown(
+            f"""
+            <div class="nav-shell">
+              <div class="nav-label">{current_space}</div>
+              <div class="nav-value">{account_value}</div>
+              <div class="nav-copy">{role_value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with header_cols[2]:
+        action_count = 4 if (role != "admin" and can_current_account_access_admin()) else 3
+        action_cols = st.columns(action_count)
+        action_index = 0
+        if role == "admin":
+            with action_cols[action_index]:
+                if st.button(
+                    "Retour a mon espace",
+                    use_container_width=True,
+                    key="topbar-back-user-space",
+                ):
+                    st.session_state.active_role = get_current_account_role() or None
+                    st.rerun()
+            action_index += 1
         else:
-            current_space = "Espace admin"
-        st.markdown(f"<div class='status-pill'>{current_space}</div>", unsafe_allow_html=True)
-        if st.session_state.active_role == "admin":
-            if st.button("Retour a mon espace", use_container_width=True, key="topbar-back-user-space"):
-                st.session_state.active_role = get_current_account_role() or None
+            with action_cols[action_index]:
+                if st.button("Accueil", use_container_width=True, key="topbar-back-home"):
+                    st.session_state.active_role = None
+                    st.rerun()
+            action_index += 1
+            if can_current_account_access_admin():
+                with action_cols[action_index]:
+                    if st.button(
+                        "Espace admin",
+                        use_container_width=True,
+                        key="topbar-admin-space",
+                    ):
+                        open_admin_space()
+                        st.rerun()
+                action_index += 1
+        with action_cols[action_index]:
+            if st.button("Se deconnecter", use_container_width=True, key="topbar-signout"):
+                sign_out()
                 st.rerun()
-        else:
-            if st.button("Retour a l'accueil", use_container_width=True, key="topbar-back-home"):
-                st.session_state.active_role = None
-                st.rerun()
-            if can_current_account_access_admin() and st.button(
-                "Espace admin",
+        action_index += 1
+        with action_cols[action_index]:
+            if st.button(
+                "Reinitialiser la demo",
                 use_container_width=True,
-                key="topbar-admin-space",
+                key="topbar-reset-demo",
             ):
-                open_admin_space()
+                reset_demo_data()
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
                 st.rerun()
-        if st.button("Se deconnecter", use_container_width=True, key="topbar-signout"):
-            sign_out()
-            st.rerun()
-        if st.button("Reinitialiser la demo", use_container_width=True, key="topbar-reset-demo"):
-            reset_demo_data()
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
 
 
 def main() -> None:
-    inject_styles()
     init_database()
     init_state()
+    inject_styles(get_visual_theme())
     expire_outdated_announcements()
     apply_pending_widget_syncs()
     render_top_bar()
