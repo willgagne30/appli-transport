@@ -3048,6 +3048,7 @@ def render_market_map(
     *,
     key: str = "market-map",
     selectable: bool = False,
+    empty_caption: str = "Aucune annonce active pour le moment.",
 ) -> str:
     st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
     st.markdown("<span class='eyebrow'>Carte interactive</span>", unsafe_allow_html=True)
@@ -3073,7 +3074,7 @@ def render_market_map(
             on_select="ignore",
             key=f"{key}-empty",
         )
-        st.caption("Aucune annonce active pour le moment.")
+        st.caption(empty_caption)
         st.markdown("</div>", unsafe_allow_html=True)
         return ""
 
@@ -4047,21 +4048,16 @@ def carrier_assistant() -> None:
 
     if st.session_state.carrier_ai["assistantMessage"]:
         show_notice("success", "Analyse prete", st.session_state.carrier_ai["assistantMessage"])
-    if any(st.session_state.carrier_ai["suggestedFilters"].values()):
+    active_filters = render_suggested_filters(st.session_state.filters)
+    if active_filters:
         filters_html = " ".join(
             f"<span class='status-pill ai'>{label}: {value}</span>"
-            for label, value in render_suggested_filters().items()
+            for label, value in active_filters.items()
         )
         st.markdown(
-            f"<div class='notice notice-info'><strong>Filtres proposes</strong>{filters_html}</div>",
+            f"<div class='notice notice-info'><strong>Filtres appliques sur la carte</strong>{filters_html}</div>",
             unsafe_allow_html=True,
         )
-        if st.button("Appliquer les filtres proposes", use_container_width=True):
-            st.session_state.filters = copy.deepcopy(
-                st.session_state.carrier_ai["suggestedFilters"]
-            )
-            st.session_state.sync_filter_widgets = True
-            st.rerun()
     if st.session_state.carrier_ai["error"]:
         show_notice("error", "Erreur de l'assistant", st.session_state.carrier_ai["error"])
 
@@ -4134,11 +4130,13 @@ def apply_carrier_ai_response(payload: dict[str, Any]) -> None:
         "priceMin": max(0, int(float(suggested.get("priceMin") or 0))),
         "priceMax": max(0, int(float(suggested.get("priceMax") or 0))),
     }
+    st.session_state.filters = copy.deepcopy(st.session_state.carrier_ai["suggestedFilters"])
+    st.session_state.sync_filter_widgets = True
     st.session_state.carrier_ai["error"] = ""
 
 
-def render_suggested_filters() -> dict[str, str]:
-    suggested = st.session_state.carrier_ai["suggestedFilters"]
+def render_suggested_filters(filters: dict[str, Any] | None = None) -> dict[str, str]:
+    suggested = filters or st.session_state.carrier_ai["suggestedFilters"]
     rendered: dict[str, str] = {}
     delivery_cities = normalize_filter_choices(suggested.get("deliveryCity"))
     if delivery_cities:
@@ -4158,6 +4156,35 @@ def render_suggested_filters() -> dict[str, str]:
             else f"A partir de {format_currency(price_min)}"
         )
     return rendered
+
+
+def build_filter_state_from_widgets() -> dict[str, Any]:
+    available_price_min, available_price_max = get_available_price_bounds()
+    selected_min, selected_max = st.session_state.get(
+        "filter_priceRange",
+        (available_price_min, available_price_max),
+    )
+    store_price_min = int(selected_min)
+    store_price_max = int(selected_max)
+    if (
+        int(selected_min) == int(available_price_min)
+        and int(selected_max) == int(available_price_max)
+    ):
+        store_price_min = 0
+        store_price_max = 0
+    return {
+        "deliveryCity": normalize_filter_choices(st.session_state.get("filter_deliveryCity")),
+        "deliveryDate": normalize_filter_choices(st.session_state.get("filter_deliveryDate")),
+        "companyName": normalize_filter_choices(st.session_state.get("filter_companyName")),
+        "priceMin": store_price_min,
+        "priceMax": store_price_max,
+    }
+
+
+def sync_filters_from_widgets() -> None:
+    filters = build_filter_state_from_widgets()
+    st.session_state.filters = filters
+    st.session_state.carrier_ai["suggestedFilters"] = copy.deepcopy(filters)
 
 
 def export_current_draft() -> dict[str, Any]:
@@ -5957,6 +5984,9 @@ def render_carrier_dashboard() -> None:
                 unsafe_allow_html=True,
             )
 
+    with st.expander("Modifier mon profil transporteur", expanded=False):
+        render_carrier_profile(edit_mode=True)
+
     filtered_announcements = get_filtered_announcements()
     map_key = f"carrier-market-map-{st.session_state.map_selection_version}"
     selected_announcement_id = render_market_map(
@@ -5965,10 +5995,8 @@ def render_carrier_dashboard() -> None:
         subtitle="Clique sur un trajet ou un point pour voir le detail et proposer ton service a l'entreprise.",
         key=map_key,
         selectable=True,
+        empty_caption="Aucune annonce disponible pour vos criteres.",
     )
-
-    with st.expander("Modifier mon profil transporteur", expanded=False):
-        render_carrier_profile(edit_mode=True)
 
     if selected_announcement_id:
         current_selection = st.session_state.selected_map_announcement_id
@@ -5981,6 +6009,12 @@ def render_carrier_dashboard() -> None:
     elif st.session_state.ignore_empty_map_selection:
         st.session_state.ignore_empty_map_selection = False
 
+    controls_col1, controls_col2 = st.columns([1.05, 0.95], gap="large")
+    with controls_col1:
+        carrier_assistant()
+    with controls_col2:
+        render_filters_panel()
+
     render_map_proposal_panel(
         st.session_state.selected_map_announcement_id,
         filtered_announcements,
@@ -5989,24 +6023,14 @@ def render_carrier_dashboard() -> None:
     left_col, right_col = st.columns([1.02, 0.98], gap="large")
 
     with left_col:
-        carrier_assistant()
-        render_filters_panel()
+        render_carrier_requests_panel()
+        render_carrier_contracts_panel()
 
     with right_col:
         render_notifications_panel(
             get_current_carrier_notifications(),
             title="Notifications transporteur",
             empty_message="Les decisions des entreprises apparaitront ici.",
-        )
-        render_carrier_requests_panel()
-        render_carrier_contracts_panel()
-
-    with st.expander("Resume de ma flotte", expanded=False):
-        profile = st.session_state.carrier_profile
-        st.write(f"Regions: {profile['regions'] or 'Non precisees'}")
-        st.write(
-            "Equipements: "
-            + (", ".join(profile["equipmentTypes"]) if profile["equipmentTypes"] else "Aucun")
         )
 
 
@@ -6030,12 +6054,14 @@ def render_filters_panel() -> None:
             options=get_delivery_city_filter_options(),
             key="filter_deliveryCity",
             placeholder="Choisir un ou plusieurs lieux",
+            on_change=sync_filters_from_widgets,
         )
         st.multiselect(
             "Date de livraison",
             options=get_delivery_filter_options(),
             key="filter_deliveryDate",
             placeholder="Choisir une ou plusieurs dates",
+            on_change=sync_filters_from_widgets,
         )
     with filter_cols[1]:
         st.multiselect(
@@ -6043,6 +6069,7 @@ def render_filters_panel() -> None:
             options=get_company_filter_options(),
             key="filter_companyName",
             placeholder="Choisir une ou plusieurs entreprises",
+            on_change=sync_filters_from_widgets,
         )
         st.slider(
             "Prix / voyage",
@@ -6050,38 +6077,23 @@ def render_filters_panel() -> None:
             max_value=available_price_max,
             step=PRICE_FILTER_STEP,
             key="filter_priceRange",
+            on_change=sync_filters_from_widgets,
         )
-    action_cols = st.columns(2)
-    with action_cols[0]:
-        if st.button("Appliquer les filtres", type="primary", use_container_width=True):
-            selected_min, selected_max = st.session_state.filter_priceRange
-            store_price_min = int(selected_min)
-            store_price_max = int(selected_max)
-            if (
-                int(selected_min) == int(available_price_min)
-                and int(selected_max) == int(available_price_max)
-            ):
-                store_price_min = 0
-                store_price_max = 0
-            st.session_state.filters = {
-                "deliveryCity": normalize_filter_choices(st.session_state.filter_deliveryCity),
-                "deliveryDate": normalize_filter_choices(st.session_state.filter_deliveryDate),
-                "companyName": normalize_filter_choices(st.session_state.filter_companyName),
-                "priceMin": store_price_min,
-                "priceMax": store_price_max,
-            }
-            st.rerun()
-    with action_cols[1]:
-        if st.button("Reinitialiser", use_container_width=True):
-            st.session_state.filters = {
-                "deliveryCity": [],
-                "deliveryDate": [],
-                "companyName": [],
-                "priceMin": 0,
-                "priceMax": 0,
-            }
-            st.session_state.sync_filter_widgets = True
-            st.rerun()
+    st.markdown(
+        "<p class='small-copy'>Les changements manuels s'appliquent automatiquement sur la carte.</p>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Reinitialiser", use_container_width=True):
+        st.session_state.filters = {
+            "deliveryCity": [],
+            "deliveryDate": [],
+            "companyName": [],
+            "priceMin": 0,
+            "priceMax": 0,
+        }
+        st.session_state.carrier_ai["suggestedFilters"] = copy.deepcopy(st.session_state.filters)
+        st.session_state.sync_filter_widgets = True
+        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
